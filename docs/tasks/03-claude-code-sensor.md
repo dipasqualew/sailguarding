@@ -1,6 +1,6 @@
 # 03 — Claude Code sensor
 
-**Status:** todo
+**Status:** done
 **Depends on:** 01, 02
 
 ## Context

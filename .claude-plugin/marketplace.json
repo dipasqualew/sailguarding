@@ -1,0 +1,14 @@
+{
+  "name": "sailguarding-local",
+  "owner": {
+    "name": "sailguarding"
+  },
+  "description": "Local, offline marketplace for the sailguarding Claude Code sensor plugin. Not published or hosted anywhere — it installs the plugin straight from this repo.",
+  "plugins": [
+    {
+      "name": "sailguarding",
+      "source": "./plugins/claude-code",
+      "description": "Pre-tool-use sensor that records each Claude Code tool call as an EventRecord."
+    }
+  ]
+}

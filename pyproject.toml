@@ -10,6 +10,10 @@ dependencies = []
 [project.urls]
 Homepage = "https://github.com/dipasqualew/sailguarding"
 
+[project.scripts]
+# The engine entrypoint the Claude Code plugin hook shells into (`sailguarding record`).
+sailguarding = "sailguarding.sensor.cli:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

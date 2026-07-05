@@ -1,0 +1,10 @@
+{
+  "name": "sailguarding",
+  "description": "Pre-tool-use sensor: records each Claude Code tool call as an EventRecord for delegation safeguarding.",
+  "version": "0.0.1",
+  "author": {
+    "name": "sailguarding"
+  },
+  "homepage": "https://github.com/dipasqualew/sailguarding",
+  "license": "MIT"
+}
