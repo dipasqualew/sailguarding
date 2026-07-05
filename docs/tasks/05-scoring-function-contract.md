@@ -1,6 +1,6 @@
 # 05 — Scoring-function contract
 
-**Status:** todo
+**Status:** done
 **Depends on:** 01, 04
 
 ## Context
