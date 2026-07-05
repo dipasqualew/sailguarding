@@ -1,6 +1,6 @@
 # 02 — Storage strategy: branch sink
 
-**Status:** todo
+**Status:** done
 **Depends on:** 01
 
 ## Context

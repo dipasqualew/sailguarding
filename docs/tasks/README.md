@@ -9,7 +9,7 @@ ingestion, calibration, and behaviour-band enforcement come after and are not ye
 | # | Task | Depends on | Status |
 |---|------|------------|--------|
 | 01 | [Scaffold and event schema](01-scaffold-and-event-schema.md) | — | done |
-| 02 | [Storage strategy: branch sink](02-storage-strategy-branch-sink.md) | 01 | todo |
+| 02 | [Storage strategy: branch sink](02-storage-strategy-branch-sink.md) | 01 | done |
 | 03 | [Claude Code sensor](03-claude-code-sensor.md) | 01, 02 | todo |
 | 04 | [Selector classification engine](04-selector-classification-engine.md) | 01, 02 | todo |
 | 05 | [Scoring-function contract](05-scoring-function-contract.md) | 01, 04 | todo |
