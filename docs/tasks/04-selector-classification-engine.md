@@ -1,6 +1,6 @@
 # 04 — Selector classification engine
 
-**Status:** todo
+**Status:** done
 **Depends on:** 01, 02
 
 ## Context
@@ -54,3 +54,29 @@ to a **triage queue** a human uses to model new actions bottom-up.
 - The known weakness (a shell command writing code slips a path-glob selector) is expected and
   acceptable for v1 — it is the honest floor. Record it so the later ML/LLM strategy has a target to
   beat, and so classification quality is tracked as a first-class safeguard concern.
+
+## Implementation
+
+Shipped in `src/sailguarding/classification/`:
+
+- `strategy.py` — the `ClassificationStrategy` seam (`event → Classification`, one of
+  `MATCHED`/`UNMATCHED`/`AMBIGUOUS`). A stub returning a fixed `Classification` is a valid strategy,
+  which is what lets tests swap the engine out.
+- `selector.py` — the declarative, serialisable `Selector` (tool/path/command attributes **and**
+  context labels in one object) and `SelectorRule` (selector → action + priority). Paths use
+  `**`-aware globbing; tool names, commands, and context values use flat case-sensitive `fnmatch`.
+- `engine.py` — `SelectorClassificationStrategy`, the first strategy over a rule registry.
+- `matcher.py` — `Matcher`: runs a strategy, fills `action_id` on a resolved event, routes the rest
+  to triage. Strategy injected, never hard-wired.
+- `triage.py` — `TriageQueue`, the in-memory collector unmatched/ambiguous events land in.
+
+**Conflict rule** (documented in `engine.py`, tested in `tests/classification/test_engine.py`):
+most-specific selector wins → ties break by explicit `priority` → a residual tie across *different*
+actions is `AMBIGUOUS`, which the matcher routes to triage rather than guessing. That refusal-to-guess
+is "fail toward caution" made concrete before any delegation float exists — the conservative outcome
+is a human modelling the action, never an arbitrary permissive pick.
+
+**Known v1 weakness** recorded in `selector.py`'s module docstring and pinned by
+`test_path_selector_misses_event_without_a_path`: a `Bash(echo ... > hello.py)` is matched as a
+*command*, not a path edit, so a path-glob selector slips it — the honest floor a later model
+strategy has to beat.
