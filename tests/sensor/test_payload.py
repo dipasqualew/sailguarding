@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from sailguarding.sensor.payload import HookPayloadError, parse_payload
+from sailguarding.sensor.payload import (
+    HookPayloadError,
+    parse_payload,
+    parse_session_payload,
+)
 
 
 def _valid() -> dict[str, object]:
@@ -79,3 +83,26 @@ def test_missing_tool_input_defaults_to_empty() -> None:
     del data["tool_input"]
 
     assert parse_payload(data).tool_input == {}
+
+
+@pytest.mark.parametrize("event", ["Stop", "SessionEnd"])
+def test_parses_a_flush_payload(event: str) -> None:
+    payload = parse_session_payload({"session_id": "s", "cwd": "/work", "hook_event_name": event})
+
+    assert payload.session_id == "s"
+    assert payload.cwd == "/work"
+    assert payload.hook_event_name == event
+
+
+@pytest.mark.parametrize("field", ["session_id", "cwd"])
+def test_flush_payload_missing_required_field_raises(field: str) -> None:
+    data = {"session_id": "s", "cwd": "/work", "hook_event_name": "Stop"}
+    del data[field]
+
+    with pytest.raises(HookPayloadError, match=field):
+        parse_session_payload(data)
+
+
+def test_flush_payload_rejects_non_flush_events() -> None:
+    with pytest.raises(HookPayloadError, match="Stop"):
+        parse_session_payload({"session_id": "s", "cwd": "/work", "hook_event_name": "PreToolUse"})

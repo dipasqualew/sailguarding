@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from sailguarding.sensor.redaction import DEFAULT_SECRET_KEY_PATTERNS
+from sailguarding.sensor.spool import SpoolStorage
 from sailguarding.storage import BranchStorage, BranchStorageConfig, StorageStrategy
 
 # Environment variables the sensor reads. Prefixed to stay clear of the harness's own vars.
@@ -32,6 +33,8 @@ class SensorConfig:
     :param team: Ambient team label to stamp on context, if configured.
     :param environment: Ambient environment label to stamp on context, if configured.
     :param redact_keys: Secret-bearing key patterns the redactor masks.
+    :param spool_root: Local directory events are staged in before the deferred branch commit.
+        Resolved from git at invocation time; ``None`` until then.
     """
 
     repo_path: Path
@@ -39,6 +42,7 @@ class SensorConfig:
     team: str | None = None
     environment: str | None = None
     redact_keys: tuple[str, ...] = field(default=DEFAULT_SECRET_KEY_PATTERNS)
+    spool_root: Path | None = None
 
     @classmethod
     def from_env(cls, repo_path: Path, env: Mapping[str, str]) -> SensorConfig:
@@ -57,8 +61,18 @@ class SensorConfig:
         )
 
 
-def build_storage(config: SensorConfig) -> StorageStrategy:
-    """The default sink: the branch sink from task 02, targeting the configured branch."""
+def build_spool_storage(config: SensorConfig) -> SpoolStorage:
+    """The per-tool-call sink: stage events locally, to be committed on Stop / SessionEnd."""
+    if config.spool_root is None:
+        raise ValueError("SensorConfig.spool_root must be resolved before building the spool")
+    return SpoolStorage(config.spool_root)
+
+
+def build_branch_storage(config: SensorConfig) -> StorageStrategy:
+    """The commit sink: the branch sink from task 02, targeting the configured branch.
+
+    The flush command writes a whole session's staged events through this in one commit.
+    """
     return BranchStorage(BranchStorageConfig(repo_path=config.repo_path, branch=config.branch))
 
 

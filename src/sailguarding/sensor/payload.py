@@ -19,12 +19,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-# The one hook event this sensor handles. Anything else is a misconfiguration.
+# The pre-tool-use event the sensor records from.
 PRE_TOOL_USE = "PreToolUse"
+
+# The lifecycle events the sensor flushes on: Stop (once per agent turn) and SessionEnd (once
+# per session, the backstop). Both carry the session id and cwd the flush needs.
+STOP = "Stop"
+SESSION_END = "SessionEnd"
+FLUSH_EVENTS = frozenset({STOP, SESSION_END})
 
 
 class HookPayloadError(ValueError):
-    """The stdin payload was not a well-formed PreToolUse invocation."""
+    """The stdin payload was not a well-formed hook invocation."""
 
 
 @dataclass(frozen=True)
@@ -81,6 +87,40 @@ def parse_payload(data: Mapping[str, Any]) -> HookPayload:
         hook_event_name=event,
         transcript_path=_optional_str(data, "transcript_path"),
         permission_mode=_optional_str(data, "permission_mode"),
+    )
+
+
+@dataclass(frozen=True)
+class SessionPayload:
+    """A parsed Stop or SessionEnd invocation — enough to flush a session's staged events.
+
+    :param session_id: The session whose staged events should be flushed.
+    :param cwd: The working directory, anchoring the repo the branch sink commits to.
+    :param hook_event_name: ``"Stop"`` or ``"SessionEnd"``.
+    """
+
+    session_id: str
+    cwd: str
+    hook_event_name: str
+
+
+def parse_session_payload(data: Mapping[str, Any]) -> SessionPayload:
+    """Validate and build a :class:`SessionPayload` from a Stop / SessionEnd stdin object.
+
+    Raises :class:`HookPayloadError` if a required field is missing or the event is not a flush
+    event. Runs behind the flush command's fail-open boundary.
+    """
+    if not isinstance(data, Mapping):
+        raise HookPayloadError(f"hook payload must be a JSON object, got {type(data).__name__}")
+
+    event = data.get("hook_event_name")
+    if event not in FLUSH_EVENTS:
+        raise HookPayloadError(f"expected one of {sorted(FLUSH_EVENTS)} payloads, got {event!r}")
+
+    return SessionPayload(
+        session_id=_require_str(data, "session_id"),
+        cwd=_require_str(data, "cwd"),
+        hook_event_name=event,
     )
 
 

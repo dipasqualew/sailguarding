@@ -22,12 +22,21 @@ MARKETPLACE = REPO_ROOT / ".claude-plugin" / "marketplace.json"
 PLUGIN_DIR = REPO_ROOT / "plugins" / "claude-code"
 PLUGIN_MANIFEST = PLUGIN_DIR / ".claude-plugin" / "plugin.json"
 HOOKS_FILE = PLUGIN_DIR / "hooks" / "hooks.json"
-HOOK_SCRIPT = PLUGIN_DIR / "bin" / "pre-tool-use.sh"
+HOOK_SCRIPT = PLUGIN_DIR / "bin" / "hook.sh"
 
 
 def _load(path: Path) -> dict[str, Any]:
     data: dict[str, Any] = json.loads(path.read_text())
     return data
+
+
+def _sole_command(hooks: dict[str, Any], event: str) -> str:
+    groups = hooks[event]
+    assert len(groups) == 1
+    (hook,) = groups[0]["hooks"]
+    assert hook["type"] == "command"
+    command: str = hook["command"]
+    return command
 
 
 def test_marketplace_lists_the_plugin_at_a_relative_source() -> None:
@@ -50,38 +59,44 @@ def test_plugin_manifest_has_required_fields() -> None:
     assert manifest["version"]
 
 
-def test_hooks_declare_a_pre_tool_use_command_hook() -> None:
+def test_pre_tool_use_records_every_tool_call() -> None:
     hooks = _load(HOOKS_FILE)["hooks"]
 
-    pre_tool_use = hooks["PreToolUse"]
-    assert len(pre_tool_use) == 1
-    matcher = pre_tool_use[0]
+    matcher = hooks["PreToolUse"][0]
     # A catch-all matcher: the sensor records every tool call.
     assert matcher["matcher"] == "*"
-    (hook,) = matcher["hooks"]
-    assert hook["type"] == "command"
-    # The command resolves its script from the plugin's install dir via CLAUDE_PLUGIN_ROOT.
-    assert hook["command"] == "${CLAUDE_PLUGIN_ROOT}/bin/pre-tool-use.sh"
+    # The command resolves its script from the plugin's install dir via CLAUDE_PLUGIN_ROOT, and
+    # invokes the engine's `record` subcommand (stage the tool call).
+    assert _sole_command(hooks, "PreToolUse") == "${CLAUDE_PLUGIN_ROOT}/bin/hook.sh record"
 
 
-def test_hook_command_points_at_an_existing_executable_script() -> None:
-    hook = _load(HOOKS_FILE)["hooks"]["PreToolUse"][0]["hooks"][0]
-    relative = hook["command"].replace("${CLAUDE_PLUGIN_ROOT}/", "")
+def test_stop_and_session_end_flush_the_session() -> None:
+    hooks = _load(HOOKS_FILE)["hooks"]
 
-    script = PLUGIN_DIR / relative
-
-    assert script == HOOK_SCRIPT
-    assert script.exists()
-    mode = script.stat().st_mode
-    assert mode & stat.S_IXUSR, "hook script must be executable"
+    # Both lifecycle events commit the staged events via the engine's `flush` subcommand: Stop
+    # once per turn, SessionEnd once per session (the backstop).
+    assert _sole_command(hooks, "Stop") == "${CLAUDE_PLUGIN_ROOT}/bin/hook.sh flush"
+    assert _sole_command(hooks, "SessionEnd") == "${CLAUDE_PLUGIN_ROOT}/bin/hook.sh flush"
 
 
-def test_hook_script_invokes_the_engine_record_entrypoint() -> None:
+def test_every_hook_command_points_at_the_existing_executable_script() -> None:
+    hooks = _load(HOOKS_FILE)["hooks"]
+
+    for event in ("PreToolUse", "Stop", "SessionEnd"):
+        command = _sole_command(hooks, event)
+        relative = command.replace("${CLAUDE_PLUGIN_ROOT}/", "").split(" ", 1)[0]
+        script = PLUGIN_DIR / relative
+        assert script == HOOK_SCRIPT
+        assert script.exists()
+        assert script.stat().st_mode & stat.S_IXUSR, "hook script must be executable"
+
+
+def test_hook_script_invokes_the_configurable_engine_and_is_fail_open() -> None:
     body = HOOK_SCRIPT.read_text()
 
-    # It shells into the configurable engine's `record` subcommand and is fail-open (exit 0).
+    # It shells into the configurable engine's subcommand ($1) and is fail-open (exit 0).
     assert "SAILGUARDING_ENGINE" in body
-    assert "record" in body
+    assert "subcommand" in body
     assert "exit 0" in body
 
 

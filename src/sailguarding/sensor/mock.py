@@ -31,7 +31,8 @@ from pathlib import Path
 from typing import Any
 
 from sailguarding.sensor.cli import ENV_PROJECT_DIR, main
-from sailguarding.sensor.payload import PRE_TOOL_USE
+from sailguarding.sensor.payload import PRE_TOOL_USE, SESSION_END, STOP
+from sailguarding.sensor.spool import SpoolStorage
 from sailguarding.storage import InMemoryStorage, StorageStrategy
 from sailguarding.storage.git import GitResult, GitRunner
 
@@ -61,6 +62,27 @@ class PreToolUseInvocation:
             "hook_event_name": PRE_TOOL_USE,
             "tool_name": self.tool_name,
             "tool_input": dict(self.tool_input),
+        }
+
+    def stdin_bytes(self) -> bytes:
+        return json.dumps(self.payload()).encode()
+
+
+@dataclass(frozen=True)
+class LifecycleInvocation:
+    """One simulated Stop or SessionEnd call: the payload that triggers a flush."""
+
+    session_id: str
+    cwd: str
+    hook_event_name: str
+    transcript_path: str
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "session_id": self.session_id,
+            "transcript_path": self.transcript_path,
+            "cwd": self.cwd,
+            "hook_event_name": self.hook_event_name,
         }
 
     def stdin_bytes(self) -> bytes:
@@ -100,6 +122,22 @@ class MockClaudeCode:
             permission_mode=self.permission_mode,
         )
 
+    def stop(self) -> LifecycleInvocation:
+        """Build a Stop invocation (fires once per agent turn) that triggers a flush."""
+        return self._lifecycle(STOP)
+
+    def session_end(self) -> LifecycleInvocation:
+        """Build a SessionEnd invocation (fires once per session) that triggers a flush."""
+        return self._lifecycle(SESSION_END)
+
+    def _lifecycle(self, event: str) -> LifecycleInvocation:
+        return LifecycleInvocation(
+            session_id=self.session_id,
+            cwd=self.cwd,
+            hook_event_name=event,
+            transcript_path=self.transcript_path,
+        )
+
     def build_env(self, extra: Mapping[str, str] | None = None) -> dict[str, str]:
         """The environment Claude Code exposes to the hook, plus any test overrides."""
         env: dict[str, str] = dict(self.base_env)
@@ -131,6 +169,30 @@ class MockClaudeCode:
             storage_factory=lambda _config: sink,
             git_factory=(lambda _path: git) if git is not None else _default_git_factory,
             clock=clock,
+        )
+
+    def dispatch_flush_in_process(
+        self,
+        invocation: LifecycleInvocation,
+        *,
+        spool: SpoolStorage,
+        branch: StorageStrategy,
+        git: GitRunner | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> int:
+        """Run the flush entrypoint in-process: drain ``spool`` and commit to ``branch``.
+
+        Exercises the real Stop / SessionEnd path — stdin JSON parse → drain → one commit — with
+        the spool and commit sinks injected so a test can assert the branch received the batch
+        and the spool was cleared.
+        """
+        return main(
+            ["flush"],
+            stdin=io.BytesIO(invocation.stdin_bytes()),
+            env=dict(env) if env is not None else self.build_env(),
+            spool_factory=lambda _config: spool,
+            branch_factory=lambda _config: branch,
+            git_factory=(lambda _path: git) if git is not None else _default_git_factory,
         )
 
 
