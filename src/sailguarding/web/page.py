@@ -97,6 +97,20 @@ td code { font-size: 12px; color: var(--ink); }
 .sg .sg-sel code { font-size: 12px; }
 .sg .sg-tags { display: flex; gap: 6px; white-space: nowrap; }
 
+.tree { display: grid; gap: 8px; }
+.node { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 13px; }
+.node.demo { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.node .n-name { font-weight: 600; }
+.node .n-name .twig { color: var(--muted); font-weight: 400; }
+.node .n-budget { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.node .n-rem { font-variant-numeric: tabular-nums; font-weight: 700; }
+.pill.declared { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+.pill.inherited { color: var(--muted); }
+.pill.demo { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.override { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.override input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+
 .log { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 320px; overflow: auto; }
 .log li { display: flex; justify-content: space-between; align-items: center; gap: 10px;
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; }
@@ -131,6 +145,19 @@ footer code { color: var(--ink); }
     <div class="sg-list" id="safeguards"></div>
   </div>
 
+  <div class="panel" style="margin-top:20px">
+    <h2>Govern → action tree &amp; budgets <span class="tag">task 07</span></h2>
+    <p class="sub">The demo action <code>write-tests</code> is a leaf of a real tree. A budget
+      declared on the parent <b>inherits</b> down to the leaf; an explicit leaf <b>override</b>
+      wins. The <b>resolved</b> budget of the leaf is exactly the <code>remaining_budget</code> the
+      scorer reads — so the tree drives the float. Move the parent budget slider below, or toggle
+      the override.</p>
+    <div class="tree" id="tree"></div>
+    <label class="override"><input type="checkbox" id="override">
+      Declare an explicit <code>write-tests</code> override (__OVERRIDE_PCT__% remaining) — watch it
+      win over the inherited parent budget</label>
+  </div>
+
   <div class="grid">
     <div class="panel">
       <h2>Score → delegation float <span class="tag">task 05</span></h2>
@@ -149,7 +176,7 @@ footer code { color: var(--ink); }
         <input type="range" id="flakiness" min="0" max="__FLAKINESS_MAX_PCT__" step="0.1">
       </div>
       <div class="control">
-        <label>Remaining error budget <span class="val"><span id="budget-v"></span>%</span></label>
+        <label>Parent (root) error budget <span class="val"><span id="budget-v"></span>%</span></label>
         <input type="range" id="budget" min="0" max="100" step="1">
       </div>
 
@@ -213,12 +240,28 @@ function onToggle(e) {
   rescore();
 }
 
+function renderTree(nodes) {
+  document.getElementById("tree").innerHTML = (nodes || []).map(n => {
+    const rem = n.remaining === null ? "—" : Math.round(n.remaining * 100) + "%";
+    const badge = n.source === "declared"
+      ? `<span class="pill declared">declared</span>`
+      : (n.source === "inherited" ? `<span class="pill inherited">inherited</span>` : "");
+    const twig = n.depth > 0 ? "&nbsp;".repeat((n.depth - 1) * 4) + "└─ " : "";
+    const demo = n.is_demo ? ` <span class="pill demo">scored</span>` : "";
+    return `<div class="node ${n.is_demo ? "demo" : ""}">
+      <span class="n-name"><span class="twig">${twig}</span>${n.label}${demo}</span>
+      <span class="n-budget">${badge}<span class="n-rem">${rem}</span></span>
+    </div>`;
+  }).join("");
+}
+
 function renderScore(d) {
   document.getElementById("score").textContent = d.score.toFixed(2);
   document.getElementById("binding").textContent = d.binding;
   document.getElementById("fn").textContent = d.function.name + " v" + d.function.version;
   document.getElementById("count").textContent = d.decisions_logged;
   renderSafeguards(d.safeguards);
+  renderTree(d.tree);
 
   const bars = d.ceilings.map(c => {
     const pct = Math.round(c.ceiling * 100);
@@ -262,6 +305,7 @@ function readInputs() {
     budget: (parseInt(document.getElementById("budget").value, 10) / 100).toString(),
   };
   if (disabled.size) params.disabled = [...disabled].join(",");
+  if (document.getElementById("override").checked) params.override = "1";
   return params;
 }
 function syncLabels() {
@@ -295,6 +339,7 @@ function onInput() { clearTimeout(timer); syncLabels(); timer = setTimeout(resco
   seedLog(INITIAL.recent);
   ["impact", "flakiness", "budget"].forEach(id =>
     document.getElementById(id).addEventListener("input", onInput));
+  document.getElementById("override").addEventListener("change", rescore);
 })();
 </script>
 </body>
@@ -309,6 +354,7 @@ def render_page(
     safeguards: list[dict[str, Any]],
     flakiness_max: float,
     impact_max: float,
+    override_remaining: float,
 ) -> str:
     """Fill the template with server-computed state and return the full HTML document."""
     subs = {
@@ -318,6 +364,7 @@ def render_page(
         "__FLAKINESS_MAX__": json.dumps(flakiness_max),
         "__FLAKINESS_MAX_PCT__": _trim(flakiness_max * 100),
         "__IMPACT_MAX__": _trim(impact_max),
+        "__OVERRIDE_PCT__": _trim(override_remaining * 100),
     }
     html = _TEMPLATE
     for token, value in subs.items():

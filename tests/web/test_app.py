@@ -90,6 +90,41 @@ def test_disabling_a_binding_moves_the_float() -> None:
     assert _panel(lifted)["impact"]["enabled"] is False
 
 
+def test_score_reports_the_action_tree_with_resolved_budgets() -> None:
+    data = _score(App(), impact=1, flakiness=0.004, budget=0.6)
+    tree = data["tree"]
+    assert isinstance(tree, list)
+    by_id = {n["id"]: n for n in tree}
+    assert {"ship-update", "write-tests", "update-docs"} <= set(by_id)
+    # The parent declares the budget; the demo leaf inherits it, and that is what the scorer read.
+    assert by_id["ship-update"]["source"] == "declared"
+    assert by_id["write-tests"]["source"] == "inherited"
+    assert by_id["write-tests"]["remaining"] == pytest.approx(0.6)
+    assert data["resolved_budget"] == pytest.approx(0.6)
+
+
+def test_leaf_override_wins_and_drives_the_float() -> None:
+    app = App()
+    # Parent budget is full; without an override the leaf inherits it and budget does not bind.
+    inherited = _score(app, impact=1, flakiness=0.004, budget=1.0)
+    assert inherited["resolved_budget"] == pytest.approx(1.0)
+    # Declare the leaf override: the tighter leaf budget now resolves and pulls the float down.
+    overridden = _score(app, impact=1, flakiness=0.004, budget=1.0, override=1)
+    assert float(overridden["resolved_budget"]) < 1.0  # type: ignore[arg-type]
+    assert overridden["binding"] == "Remaining budget"
+    assert float(overridden["score"]) < float(inherited["score"])  # type: ignore[arg-type]
+    tree = overridden["tree"]
+    assert isinstance(tree, list)
+    leaf = next(n for n in tree if n["id"] == "write-tests")
+    assert leaf["source"] == "declared"
+
+
+def test_index_page_embeds_the_action_tree_panel() -> None:
+    body = App().handle("GET", "/").body.decode("utf-8")
+    assert "action tree" in body  # the panel heading
+    assert "Ship the checkout update" in body  # the root node label reaches the page
+
+
 def test_index_page_embeds_the_safeguards_panel() -> None:
     body = App().handle("GET", "/").body.decode("utf-8")
     assert "Govern → safeguards" in body

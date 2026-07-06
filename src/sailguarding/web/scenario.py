@@ -25,7 +25,7 @@ from sailguarding.classification import (
     SelectorClassificationStrategy,
     SelectorRule,
 )
-from sailguarding.domain import Context, EventRecord
+from sailguarding.domain import Action, Context, EventRecord
 from sailguarding.safeguards import (
     BindingRegistry,
     InMemoryBindingRegistry,
@@ -41,6 +41,13 @@ from sailguarding.scoring import (
     SafeguardCeiling,
     SafeguardSignal,
     banded_ceiling,
+)
+from sailguarding.tree import (
+    ActionTree,
+    BudgetBinding,
+    ErrorBudget,
+    InMemoryBudgetRegistry,
+    resolve_budget,
 )
 
 ACTION_ID = "write-tests"
@@ -115,6 +122,95 @@ _SPEC_BY_ID = {spec.id: spec for spec in SAFEGUARDS}
 # The remaining error budget enters as one more ceiling: a nearly-spent budget collapses the
 # float toward the human even when every safeguard is holding.
 BUDGET_RATIONALE = "remaining budget is its own ceiling — spend it and the float falls"
+
+
+# --- The action tree & error budgets (task 07) -------------------------------------------------
+#
+# The demo action is a *leaf* in a real tree: shipping the checkout update decomposes into writing
+# the tests. A budget declared on the parent inherits down to the leaf; an explicit leaf override
+# wins. The *resolved* budget from this chain is exactly the `remaining_budget` the scorer reads —
+# so moving the parent budget, or toggling the override, visibly drives the delegation float.
+_ROOT_ACTION = "ship-update"
+TREE = ActionTree(
+    Action(
+        id=_ROOT_ACTION,
+        label="Ship the checkout update",
+        children=(
+            Action(id=ACTION_ID, label="Write the tests", parent_id=_ROOT_ACTION),
+            Action(id="update-docs", label="Update the docs", parent_id=_ROOT_ACTION),
+        ),
+    )
+)
+
+# The explicit leaf override the demo toggles on: a tighter appetite for write-tests specifically,
+# declared *at the leaf*, so it wins over whatever the parent would pass down.
+LEAF_OVERRIDE_REMAINING = 0.25
+_BUDGET_SELECTOR = Selector(context={"repo": "checkout"})
+
+
+def budget_registry(*, parent_remaining: float, override: bool) -> InMemoryBudgetRegistry:
+    """The budget bindings for the demo: a parent budget, plus an optional leaf override.
+
+    The parent binds to the root action-class in ``repo=checkout``; the leaf override, when on,
+    binds to ``write-tests`` directly. Both use the same selector language safeguards bind through.
+    """
+    registry = InMemoryBudgetRegistry(
+        [
+            BudgetBinding(
+                budget=ErrorBudget("ship-budget", "Ship budget", parent_remaining),
+                selector=_BUDGET_SELECTOR,
+                action=_ROOT_ACTION,
+            )
+        ]
+    )
+    if override:
+        registry.register(
+            BudgetBinding(
+                budget=ErrorBudget("tests-budget", "Tests override", LEAF_OVERRIDE_REMAINING),
+                selector=_BUDGET_SELECTOR,
+                action=ACTION_ID,
+            )
+        )
+    return registry
+
+
+def resolved_budget(*, parent_remaining: float, override: bool) -> float:
+    """The remaining budget the scorer reads for the demo leaf, resolved through the tree.
+
+    This is the tree driving the float: it is the parent's budget inherited down to ``write-tests``,
+    unless the leaf override is on, in which case the leaf's own budget wins.
+    """
+    registry = budget_registry(parent_remaining=parent_remaining, override=override)
+    budget = resolve_budget(TREE, ACTION_ID, CONTEXT, registry)
+    return budget.remaining if budget is not None else 1.0
+
+
+def tree_panel(*, parent_remaining: float, override: bool) -> list[dict[str, object]]:
+    """Rows for the action-tree panel: every node with the budget it resolves to and how.
+
+    For each node the panel shows its resolved :class:`ErrorBudget` and whether that budget is
+    **declared** at the node or **inherited** from an ancestor — the inheritance rule made visible.
+    The demo leaf (``write-tests``) is flagged so the UI can highlight the node the scorer reads.
+    """
+    registry = budget_registry(parent_remaining=parent_remaining, override=override)
+    rows: list[dict[str, object]] = []
+    for node in TREE.walk():
+        resolved = resolve_budget(TREE, node.id, CONTEXT, registry)
+        declared_here = registry.resolve_local(node.id, CONTEXT) is not None
+        rows.append(
+            {
+                "id": node.id,
+                "label": node.label,
+                "depth": len(TREE.path_to_root(node.id)) - 1,
+                "is_leaf": node.is_leaf,
+                "is_demo": node.id == ACTION_ID,
+                "budget_id": resolved.id if resolved is not None else None,
+                "budget_label": resolved.label if resolved is not None else "—",
+                "remaining": resolved.remaining if resolved is not None else None,
+                "source": "declared" if declared_here else ("inherited" if resolved else "none"),
+            }
+        )
+    return rows
 
 
 # --- Governance: which safeguards govern the demo action? (task 06) ----------------------------

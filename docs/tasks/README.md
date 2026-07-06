@@ -15,7 +15,7 @@ a real recommendation over governed, measured safeguards.
 | 04 | [Selector classification engine](04-selector-classification-engine.md) | 01, 02 | done |
 | 05 | [Scoring-function contract](05-scoring-function-contract.md) | 01, 04 | done |
 | 06 | [Safeguards & bindings](06-safeguards-and-bindings.md) | 04, 05 | done |
-| 07 | [Action tree & error budgets](07-action-tree-and-budgets.md) | 01, 04, 06 | todo |
+| 07 | [Action tree & error budgets](07-action-tree-and-budgets.md) | 01, 04, 06 | done |
 | 08 | [Evidence ingestion & measurement](08-evidence-ingestion-and-measurement.md) | 02, 06 | todo |
 | 09 | [Feature-vector assembly](09-feature-vector-assembly.md) | 05, 06, 07, 08 | todo |
 | 10 | [Behaviour bands & hysteresis](10-behaviour-bands-and-hysteresis.md) | 05 | todo |

@@ -73,6 +73,31 @@ def test_ceiling_breakdown_drops_a_disabled_safeguards_row() -> None:
     assert ids == {"no-flaky-tests", "remaining-budget"}  # impact's row is gone
 
 
+def test_leaf_inherits_the_parent_budget_when_no_override() -> None:
+    # With no leaf override, the demo leaf resolves to the parent (root) budget verbatim.
+    assert scenario.resolved_budget(parent_remaining=0.6, override=False) == 0.6
+
+
+def test_leaf_override_wins_over_the_inherited_parent_budget() -> None:
+    # Toggle the override on and the leaf's own budget wins, regardless of the parent value.
+    resolved = scenario.resolved_budget(parent_remaining=0.9, override=True)
+    assert resolved == scenario.LEAF_OVERRIDE_REMAINING
+
+
+def test_tree_panel_shows_inheritance_then_override() -> None:
+    inherited = {r["id"]: r for r in scenario.tree_panel(parent_remaining=0.6, override=False)}
+    # Root declares the budget; the leaf inherits the same remaining value.
+    assert inherited["ship-update"]["source"] == "declared"
+    assert inherited["write-tests"]["source"] == "inherited"
+    assert inherited["write-tests"]["remaining"] == 0.6
+    assert inherited["write-tests"]["is_demo"] is True
+
+    overridden = {r["id"]: r for r in scenario.tree_panel(parent_remaining=0.6, override=True)}
+    # With the override on, the leaf now declares its own, tighter budget.
+    assert overridden["write-tests"]["source"] == "declared"
+    assert overridden["write-tests"]["remaining"] == scenario.LEAF_OVERRIDE_REMAINING
+
+
 def test_pipeline_runs_the_real_selector_classifier() -> None:
     rows = scenario.classified_pipeline()
     by_input = {r["input"]: r for r in rows}

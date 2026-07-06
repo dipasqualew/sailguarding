@@ -1,6 +1,6 @@
 # 07 — Action tree & error budgets
 
-**Status:** todo
+**Status:** done
 **Depends on:** 01, 04, 06
 
 ## Context

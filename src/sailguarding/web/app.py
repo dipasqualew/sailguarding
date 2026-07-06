@@ -77,17 +77,22 @@ class App:
             safeguards=scenario.safeguard_panel(_disabled(params)),
             flakiness_max=FLAKINESS_MAX,
             impact_max=IMPACT_MAX,
+            override_remaining=scenario.LEAF_OVERRIDE_REMAINING,
         )
         return Response(200, "text/html; charset=utf-8", html.encode("utf-8"))
 
     def _score(self, params: dict[str, list[str]]) -> dict[str, object]:
         flakiness = _clamp(_param(params, "flakiness", 0.004), 0.0, FLAKINESS_MAX)
         services = _clamp(_param(params, "impact", 1.0), 0.0, IMPACT_MAX)
-        budget = _clamp(_param(params, "budget", 1.0), 0.0, 1.0)
+        parent_budget = _clamp(_param(params, "budget", 1.0), 0.0, 1.0)
+        override = _flag(params, "override")
         disabled = _disabled(params)
 
+        # The tree resolves the leaf's remaining budget: the parent budget inherited down to
+        # write-tests, unless the leaf override wins. That resolved value is what the scorer reads.
+        remaining = scenario.resolved_budget(parent_remaining=parent_budget, override=override)
         features = scenario.assemble_features(
-            flakiness=flakiness, services_affected=services, remaining_budget=budget
+            flakiness=flakiness, services_affected=services, remaining_budget=remaining
         )
         scorer = Scorer(scenario.scoring_function(disabled), self._log)
         decision = scorer.score(features)
@@ -100,6 +105,8 @@ class App:
             "binding": binding["label"],
             "ceilings": breakdown,
             "safeguards": scenario.safeguard_panel(disabled),
+            "tree": scenario.tree_panel(parent_remaining=parent_budget, override=override),
+            "resolved_budget": remaining,
             "features": features.to_dict(),
             "timestamp": decision.timestamp.isoformat().replace("+00:00", "Z"),
             "decisions_logged": len(self._log),
@@ -126,6 +133,14 @@ def _disabled(params: dict[str, list[str]]) -> frozenset[str]:
     if not values:
         return frozenset()
     return frozenset(sid for sid in values[0].split(",") if sid)
+
+
+def _flag(params: dict[str, list[str]], name: str) -> bool:
+    """A boolean query flag: true for ``?name=1`` / ``true`` / ``on``, false otherwise."""
+    values = params.get(name)
+    if not values:
+        return False
+    return values[0].lower() in {"1", "true", "on", "yes"}
 
 
 def _param(params: dict[str, list[str]], name: str, default: float) -> float:
