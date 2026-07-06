@@ -98,6 +98,42 @@ def test_tree_panel_shows_inheritance_then_override() -> None:
     assert overridden["write-tests"]["remaining"] == scenario.LEAF_OVERRIDE_REMAINING
 
 
+def test_current_flakiness_is_the_latest_ingested_health_signal() -> None:
+    sink = scenario.seed_metrics()
+    # The seed's newest health point (0.006) is the derived current signal.
+    assert scenario.current_flakiness(sink) == 0.006
+
+
+def test_ingesting_health_becomes_the_new_current_signal() -> None:
+    sink = scenario.seed_metrics()
+    scenario.ingest_measurement(sink, kind="health", value=0.018)
+    assert scenario.current_flakiness(sink) == 0.018
+
+
+def test_ingesting_efficacy_leaves_the_health_signal_untouched() -> None:
+    sink = scenario.seed_metrics()
+    before = scenario.current_flakiness(sink)
+    scenario.ingest_measurement(sink, kind="efficacy", value=0.5)
+    # Efficacy lands in its own series; the health signal that drives the score is unchanged.
+    assert scenario.current_flakiness(sink) == before
+
+
+def test_evidence_panel_keeps_health_and_efficacy_separate() -> None:
+    panel = scenario.evidence_panel(scenario.seed_metrics())
+    assert panel["safeguard_id"] == "no-flaky-tests"
+    health, efficacy = panel["health"], panel["efficacy"]
+    assert isinstance(health, dict) and isinstance(efficacy, dict)
+    assert health["measures"] == "health"
+    assert efficacy["measures"] == "efficacy"
+    # Each series names its own kind's metric — never the other's.
+    assert health["metric"] == "flakiness"
+    assert efficacy["metric"] == "catch_rate"
+    # Only the governing health series has a ceiling on the float.
+    assert health["ceiling"] is not None
+    assert efficacy["ceiling"] is None
+    assert health["current"] == 0.006
+
+
 def test_pipeline_runs_the_real_selector_classifier() -> None:
     rows = scenario.classified_pipeline()
     by_input = {r["input"]: r for r in rows}

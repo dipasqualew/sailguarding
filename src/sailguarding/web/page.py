@@ -73,6 +73,29 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
 .cap { text-align: right; font-variant-numeric: tabular-nums; }
 .rationale { font-size: 11px; color: var(--muted); grid-column: 2 / 4; margin-top: -4px; }
 
+.series-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 640px) { .series-grid { grid-template-columns: 1fr; } }
+.series { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; }
+.series.drives { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.series-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.series-head .series-metric { color: var(--muted); font-size: 12px; }
+.series-head .series-cur { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+.series svg { display: block; width: 100%; height: 46px; }
+.series .spark { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.series.eff .spark { stroke: var(--warn); }
+.series .spark-dot { fill: var(--accent); }
+.series.eff .spark-dot { fill: var(--warn); }
+.series-foot { font-size: 11px; color: var(--muted); margin-top: 8px; }
+.series-foot b { color: var(--ink); }
+.ingest { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+.ingest select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; }
+.ingest input[type=range] { flex: 1; min-width: 140px; }
+.ingest .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; min-width: 56px; }
+.ingest button { background: var(--accent); color: #06222f; border: 0; border-radius: 8px;
+  padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+.ingest button:hover { filter: brightness(1.07); }
+
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
@@ -158,11 +181,31 @@ footer code { color: var(--ink); }
       win over the inherited parent budget</label>
   </div>
 
+  <div class="panel" style="margin-top:20px">
+    <h2>Measure → evidence <span class="tag">task 08</span></h2>
+    <p class="sub">The <code>no-flaky-tests</code> signal is <b>derived from ingested evidence</b>,
+      not a slider. Two series are kept and <b>never conflated</b>: <b>health</b> (flakiness — a
+      cheap leading proxy that sets the ceiling) and <b>efficacy</b> (catch rate — the lagging
+      truth, tracked but never scored). Ingest a health point and watch the signal — and its ceiling
+      on the float — move; ingest an efficacy point and the float stays put.</p>
+    <div class="series-grid" id="evidence"></div>
+    <div class="ingest">
+      <select id="ingest-kind">
+        <option value="health">Health · flakiness</option>
+        <option value="efficacy">Efficacy · catch rate</option>
+      </select>
+      <input type="range" id="ingest-value">
+      <span class="val"><span id="ingest-v"></span><span id="ingest-unit">%</span></span>
+      <button id="ingest-btn">Ingest measurement</button>
+    </div>
+  </div>
+
   <div class="grid">
     <div class="panel">
       <h2>Score → delegation float <span class="tag">task 05</span></h2>
       <p class="sub">min-composition: each safeguard sets a ceiling; the weakest binds. Move the
-        inputs — watch impact cap hard and budget pull the float down.</p>
+        inputs — watch impact cap hard and budget pull the float down. Flakiness is no longer a
+        slider: it is the latest health measurement from the evidence panel above.</p>
 
       <div class="floatbox"><span class="num" id="score">0.00</span><span class="of">/ 1.00 delegation</span></div>
       <p class="binding">Binding constraint: <b id="binding">—</b> · <span id="fn">min-composition</span></p>
@@ -170,10 +213,6 @@ footer code { color: var(--ink); }
       <div class="control">
         <label>Blast radius <span class="val"><span id="impact-v"></span> svc</span></label>
         <input type="range" id="impact" min="0" max="__IMPACT_MAX__" step="1">
-      </div>
-      <div class="control">
-        <label>Flakiness <span class="val"><span id="flakiness-v"></span>%</span></label>
-        <input type="range" id="flakiness" min="0" max="__FLAKINESS_MAX_PCT__" step="0.1">
       </div>
       <div class="control">
         <label>Parent (root) error budget <span class="val"><span id="budget-v"></span>%</span></label>
@@ -255,12 +294,53 @@ function renderTree(nodes) {
   }).join("");
 }
 
+function sparkline(points) {
+  const W = 240, H = 46, P = 5;
+  if (!points || !points.length) return `<svg viewBox="0 0 ${W} ${H}"></svg>`;
+  const vals = points.map(p => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
+  const x = i => P + (points.length === 1 ? (W - 2*P)/2 : (i/(points.length-1))*(W - 2*P));
+  const y = v => P + (1 - (v - lo)/span) * (H - 2*P);
+  const path = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
+  const li = points.length - 1;
+  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <polyline class="spark" points="${path}"/>
+    <circle class="spark-dot" cx="${x(li).toFixed(1)}" cy="${y(points[li].value).toFixed(1)}" r="3"/>
+  </svg>`;
+}
+
+function fmtSeries(s) {
+  if (s.current === null) return "—";
+  return s.measures === "health"
+    ? (s.current * 100).toFixed(2) + "%"
+    : (s.current * 100).toFixed(0) + "%";
+}
+
+function renderEvidence(ev) {
+  if (!ev) return;
+  const seriesCard = (s, label) => `
+    <div class="series ${s.measures === "efficacy" ? "eff" : ""} ${s.drives_ceiling ? "drives" : ""}">
+      <div class="series-head">
+        <span class="pill ${s.measures}">${s.measures}</span>
+        <span class="series-metric">${s.metric}</span>
+        <span class="series-cur">${fmtSeries(s)}</span>
+      </div>
+      ${sparkline(s.points)}
+      <div class="series-foot">${s.drives_ceiling
+        ? `ceiling on float: <b>${s.ceiling === null ? "—" : s.ceiling.toFixed(2)}</b> · drives the score`
+        : `lagging truth · tracked, never scored`}</div>
+    </div>`;
+  document.getElementById("evidence").innerHTML =
+    seriesCard(ev.health) + seriesCard(ev.efficacy);
+}
+
 function renderScore(d) {
   document.getElementById("score").textContent = d.score.toFixed(2);
   document.getElementById("binding").textContent = d.binding;
   document.getElementById("fn").textContent = d.function.name + " v" + d.function.version;
   document.getElementById("count").textContent = d.decisions_logged;
   renderSafeguards(d.safeguards);
+  renderEvidence(d.evidence);
   renderTree(d.tree);
 
   const bars = d.ceilings.map(c => {
@@ -301,7 +381,6 @@ function pushLog(d) {
 function readInputs() {
   const params = {
     impact: document.getElementById("impact").value,
-    flakiness: (parseFloat(document.getElementById("flakiness").value) / 100).toString(),
     budget: (parseInt(document.getElementById("budget").value, 10) / 100).toString(),
   };
   if (disabled.size) params.disabled = [...disabled].join(",");
@@ -310,8 +389,6 @@ function readInputs() {
 }
 function syncLabels() {
   document.getElementById("impact-v").textContent = document.getElementById("impact").value;
-  document.getElementById("flakiness-v").textContent =
-    parseFloat(document.getElementById("flakiness").value).toFixed(1);
   document.getElementById("budget-v").textContent = document.getElementById("budget").value;
 }
 
@@ -325,21 +402,49 @@ async function rescore() {
 }
 function onInput() { clearTimeout(timer); syncLabels(); timer = setTimeout(rescore, 90); }
 
+// --- Ingest control: append one measurement, then re-score against the new evidence history. ---
+const FLAKINESS_MAX_PCT = FLAKINESS_MAX * 100;  // health slider tops out at the demo's flakiness cap
+function ingestScale() {
+  // Health (flakiness) lives in a tight 0–5% band; efficacy (catch rate) spans 0–100%.
+  const health = document.getElementById("ingest-kind").value === "health";
+  const slider = document.getElementById("ingest-value");
+  slider.min = 0; slider.max = health ? FLAKINESS_MAX_PCT : 100;
+  slider.step = health ? 0.1 : 1;
+  if (parseFloat(slider.value) > slider.max) slider.value = slider.max;
+  document.getElementById("ingest-unit").textContent = "%";
+  syncIngestLabel();
+}
+function syncIngestLabel() {
+  const health = document.getElementById("ingest-kind").value === "health";
+  const v = parseFloat(document.getElementById("ingest-value").value);
+  document.getElementById("ingest-v").textContent = health ? v.toFixed(1) : v.toFixed(0);
+}
+async function ingest() {
+  const kind = document.getElementById("ingest-kind").value;
+  const pct = parseFloat(document.getElementById("ingest-value").value);
+  const params = Object.assign(readInputs(), { kind, value: (pct / 100).toString() });
+  const res = await fetch("/api/ingest?" + new URLSearchParams(params).toString());
+  const d = await res.json();
+  renderScore(d); pushLog(d);
+}
+
 // Seed sliders from the server-computed initial features, then paint from embedded state.
 (function init() {
   const f = INITIAL.features;
   const impact = f.signals.find(s => s.safeguard_id === "impact");
-  const flak = f.signals.find(s => s.safeguard_id === "no-flaky-tests");
   document.getElementById("impact").value = impact ? impact.value : 1;
-  document.getElementById("flakiness").value = flak ? (flak.value * 100).toFixed(1) : 0.4;
   document.getElementById("budget").value = Math.round(f.remaining_budget * 100);
   syncLabels();
   renderPipeline();
   renderScore(INITIAL);
   seedLog(INITIAL.recent);
-  ["impact", "flakiness", "budget"].forEach(id =>
+  ["impact", "budget"].forEach(id =>
     document.getElementById(id).addEventListener("input", onInput));
   document.getElementById("override").addEventListener("change", rescore);
+  document.getElementById("ingest-kind").addEventListener("change", ingestScale);
+  document.getElementById("ingest-value").addEventListener("input", syncIngestLabel);
+  document.getElementById("ingest-btn").addEventListener("click", ingest);
+  ingestScale();
 })();
 </script>
 </body>
@@ -362,7 +467,6 @@ def render_page(
         "__PIPELINE_JSON__": json.dumps(pipeline),
         "__SAFEGUARDS_JSON__": json.dumps(safeguards),
         "__FLAKINESS_MAX__": json.dumps(flakiness_max),
-        "__FLAKINESS_MAX_PCT__": _trim(flakiness_max * 100),
         "__IMPACT_MAX__": _trim(impact_max),
         "__OVERRIDE_PCT__": _trim(override_remaining * 100),
     }

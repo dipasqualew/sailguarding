@@ -16,6 +16,7 @@ import json
 from dataclasses import dataclass
 from urllib.parse import parse_qs
 
+from sailguarding.measurement import InMemoryMetricsSink
 from sailguarding.scoring import InMemoryDecisionLog, Scorer
 from sailguarding.web import scenario
 from sailguarding.web.page import render_page
@@ -44,10 +45,17 @@ class App:
 
     def __init__(self) -> None:
         self._log = InMemoryDecisionLog()
+        # The metrics sink (task 08) — separate from the decision log — accumulates the safeguard's
+        # evidence across the session, so ingesting a point moves the derived signal over time.
+        self._metrics = scenario.seed_metrics()
 
     @property
     def log(self) -> InMemoryDecisionLog:
         return self._log
+
+    @property
+    def metrics(self) -> InMemoryMetricsSink:
+        return self._metrics
 
     def handle(self, method: str, path: str, query: str = "") -> Response:
         """Route one request. Only ``GET`` is served; everything else is a 405."""
@@ -59,6 +67,8 @@ class App:
             return self._index(params)
         if path == "/api/score":
             return _json(self._score(params))
+        if path == "/api/ingest":
+            return _json(self._ingest(params))
         if path == "/api/pipeline":
             return _json({"events": scenario.classified_pipeline()})
         if path == "/api/decisions":
@@ -81,8 +91,17 @@ class App:
         )
         return Response(200, "text/html; charset=utf-8", html.encode("utf-8"))
 
+    def _ingest(self, params: dict[str, list[str]]) -> dict[str, object]:
+        # Append one measurement to the live sink, then re-score: the derived signal (and, for a
+        # health point, its ceiling on the float) moves because the evidence history changed.
+        kind = "efficacy" if _param_str(params, "kind") == "efficacy" else "health"
+        value = _clamp(_param(params, "value", scenario.current_flakiness(self._metrics)), 0.0, 1.0)
+        scenario.ingest_measurement(self._metrics, kind=kind, value=value)
+        return self._score(params)
+
     def _score(self, params: dict[str, list[str]]) -> dict[str, object]:
-        flakiness = _clamp(_param(params, "flakiness", 0.004), 0.0, FLAKINESS_MAX)
+        # The no-flaky-tests signal is derived from ingested evidence (task 08), not a slider.
+        flakiness = scenario.current_flakiness(self._metrics)
         services = _clamp(_param(params, "impact", 1.0), 0.0, IMPACT_MAX)
         parent_budget = _clamp(_param(params, "budget", 1.0), 0.0, 1.0)
         override = _flag(params, "override")
@@ -105,6 +124,7 @@ class App:
             "binding": binding["label"],
             "ceilings": breakdown,
             "safeguards": scenario.safeguard_panel(disabled),
+            "evidence": scenario.evidence_panel(self._metrics),
             "tree": scenario.tree_panel(parent_remaining=parent_budget, override=override),
             "resolved_budget": remaining,
             "features": features.to_dict(),
@@ -151,6 +171,11 @@ def _param(params: dict[str, list[str]], name: str, default: float) -> float:
         return float(values[0])
     except ValueError:
         return default
+
+
+def _param_str(params: dict[str, list[str]], name: str, default: str = "") -> str:
+    values = params.get(name)
+    return values[0] if values else default
 
 
 def _clamp(value: float, low: float, high: float) -> float:

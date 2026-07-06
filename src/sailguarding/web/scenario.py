@@ -26,6 +26,12 @@ from sailguarding.classification import (
     SelectorRule,
 )
 from sailguarding.domain import Action, Context, EventRecord
+from sailguarding.measurement import (
+    Evidence,
+    InMemoryMetricsSink,
+    MetricsSink,
+    latest_signal,
+)
 from sailguarding.safeguards import (
     BindingRegistry,
     InMemoryBindingRegistry,
@@ -361,6 +367,125 @@ def ceiling_breakdown(
     for row in rows:
         row["binding"] = row is binding
     return rows
+
+
+# --- Measure: evidence ingestion & the derived signal (task 08) --------------------------------
+#
+# The no-flaky-tests safeguard's signal is no longer a hand-set slider — it is *derived* from
+# ingested evidence. Two series are kept, deliberately never conflated: HEALTH (flakiness, a cheap
+# leading proxy) and EFFICACY (catch rate, the lagging truth, back-tested). The safeguard declares
+# HEALTH, so the *health* series' latest point is what sets its ceiling on the delegation float;
+# the efficacy series is tracked alongside but never feeds the score. Ingesting a health point moves
+# the float; ingesting an efficacy point does not — the "never conflate them" rule, made visible.
+
+_HEALTH_METRIC = _FLAKINESS.metric  # "flakiness" — the declared health proxy
+_EFFICACY_METRIC = "catch_rate"  # P(catch | actually bad), back-tested — the lagging number
+_DEFAULT_FLAKINESS = 0.004  # fallback current signal if no health evidence has been ingested yet
+
+
+def seed_metrics() -> InMemoryMetricsSink:
+    """A metrics sink pre-loaded with a health and an efficacy history for no-flaky-tests.
+
+    Health (flakiness) trends down over the week — the proxy improving; efficacy (catch rate) rises
+    more slowly — the lagging truth catching up. Both are the *same* safeguard, kept as two separate
+    series in the one sink, so the demo can show them side by side without ever mixing them.
+    """
+    sink = InMemoryMetricsSink()
+    for day, flakiness in enumerate((0.030, 0.022, 0.015, 0.009, 0.006), start=1):
+        sink.append(_measurement(Measurement.HEALTH, _HEALTH_METRIC, flakiness, day))
+    for day, catch_rate in ((1, 0.72), (3, 0.80), (5, 0.86)):
+        sink.append(_measurement(Measurement.EFFICACY, _EFFICACY_METRIC, catch_rate, day))
+    return sink
+
+
+def _measurement(measures: Measurement, metric: str, value: float, day: int) -> Evidence:
+    return Evidence(
+        safeguard_id=_FLAKINESS.id,
+        metric=metric,
+        value=value,
+        measures=measures,
+        context=CONTEXT,
+        timestamp=datetime(2026, 7, day, 9, 0, tzinfo=UTC),
+    )
+
+
+def current_flakiness(sink: MetricsSink) -> float:
+    """The no-flaky-tests signal the scorer reads: the latest *health* measurement's value.
+
+    This is the whole point of task 08 — the signal that feeds the score is derived from ingested
+    evidence, not set by hand. Falls back to a healthy default if nothing has been ingested.
+    """
+    signal = latest_signal(sink, _FLAKINESS.id, Measurement.HEALTH)
+    return float(signal.value) if signal is not None else _DEFAULT_FLAKINESS
+
+
+def ingest_measurement(
+    sink: MetricsSink,
+    *,
+    kind: str,
+    value: float,
+    timestamp: datetime | None = None,
+) -> Evidence:
+    """Append one new measurement for no-flaky-tests to the sink and return it.
+
+    ``kind`` selects the series — ``"efficacy"`` lands in the efficacy series, anything else in
+    health — so a caller extends exactly one series and the other is untouched. Timestamps default
+    to now, so an ingested point is always the newest and becomes the current signal for its kind.
+    """
+    measures = Measurement.EFFICACY if kind == "efficacy" else Measurement.HEALTH
+    metric = _EFFICACY_METRIC if measures is Measurement.EFFICACY else _HEALTH_METRIC
+    evidence = Evidence(
+        safeguard_id=_FLAKINESS.id,
+        metric=metric,
+        value=value,
+        measures=measures,
+        context=CONTEXT,
+        timestamp=timestamp or datetime.now(UTC),
+    )
+    sink.append(evidence)
+    return evidence
+
+
+def evidence_panel(sink: MetricsSink) -> dict[str, object]:
+    """The health and efficacy series for no-flaky-tests, as two clearly-labelled sparklines.
+
+    Each series carries its points (oldest first), its current value, and — for health, the kind
+    that governs — the ceiling that value sets on the delegation float. ``drives_ceiling`` marks
+    which series the score actually reads, so the UI can show that efficacy is measured but never
+    conflated into the health-driven float.
+    """
+    return {
+        "safeguard_id": _FLAKINESS.id,
+        "label": _FLAKINESS.label,
+        "health": _series_view(sink, Measurement.HEALTH, _HEALTH_METRIC, drives_ceiling=True),
+        "efficacy": _series_view(
+            sink, Measurement.EFFICACY, _EFFICACY_METRIC, drives_ceiling=False
+        ),
+    }
+
+
+def _series_view(
+    sink: MetricsSink, measures: Measurement, metric: str, *, drives_ceiling: bool
+) -> dict[str, object]:
+    points = sink.series(_FLAKINESS.id, measures)
+    signal = latest_signal(sink, _FLAKINESS.id, measures)
+    current = float(signal.value) if signal is not None else None
+    # Only the governing (health) series maps to a ceiling on the float; efficacy is tracked but
+    # never scored, so it carries no ceiling — the never-conflate rule, in the data shape.
+    ceiling: float | None = None
+    if drives_ceiling and current is not None:
+        ceiling = _clamp(_FLAKINESS.ceiling(current))
+    return {
+        "measures": measures.value,
+        "metric": metric,
+        "points": [
+            {"value": e.value, "timestamp": e.timestamp.isoformat().replace("+00:00", "Z")}
+            for e in points
+        ],
+        "current": current,
+        "ceiling": ceiling,
+        "drives_ceiling": drives_ceiling,
+    }
 
 
 # --- The observe → classify pipeline, shown as supporting context above the scorer. ------------

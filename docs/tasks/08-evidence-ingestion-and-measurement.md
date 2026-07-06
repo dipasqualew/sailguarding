@@ -1,6 +1,6 @@
 # 08 — Evidence ingestion & safeguard measurement
 
-**Status:** todo
+**Status:** done
 **Depends on:** 02, 06
 
 ## Context
