@@ -81,6 +81,21 @@ td code { font-size: 12px; color: var(--ink); }
 .pill.matched { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
 .pill.unmatched { color: var(--muted); }
 .pill.ambiguous { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.pill.structural { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+.pill.human_dependent { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+.pill.health { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.pill.efficacy { color: var(--ink); border-color: var(--muted); }
+
+.sg-list { display: grid; gap: 10px; }
+.sg { display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 12px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
+  padding: 11px 13px; cursor: pointer; transition: opacity .15s ease; }
+.sg.off { opacity: 0.45; }
+.sg input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.sg .sg-name { font-weight: 600; }
+.sg .sg-sel { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.sg .sg-sel code { font-size: 12px; }
+.sg .sg-tags { display: flex; gap: 6px; white-space: nowrap; }
 
 .log { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 320px; overflow: auto; }
 .log li { display: flex; justify-content: space-between; align-items: center; gap: 10px;
@@ -105,6 +120,15 @@ footer code { color: var(--ink); }
     <p class="sub">Raw tool events resolved to actions by the deterministic selector engine.</p>
     <table id="pipeline"><thead><tr><th>Tool</th><th>Input</th><th>Outcome</th><th>Action</th></tr></thead>
       <tbody></tbody></table>
+  </div>
+
+  <div class="panel" style="margin-top:20px">
+    <h2>Govern → safeguards <span class="tag">task 06</span></h2>
+    <p class="sub">The binding registry resolves which safeguards govern
+      <code>write-tests</code> in <code>repo=checkout</code>. Each carries its structural /
+      human-dependent tag and health / efficacy label. Toggle one off to remove its ceiling from
+      the score — proof that the registry decides what reaches the scorer.</p>
+    <div class="sg-list" id="safeguards"></div>
   </div>
 
   <div class="grid">
@@ -162,11 +186,39 @@ function renderPipeline() {
     <td>${r.action_id ? "<code>"+r.action_id+"</code>" : "—"}</td></tr>`).join("");
 }
 
+const disabled = new Set();  // safeguard ids toggled off; drives which ceilings reach the scorer
+
+function kindLabel(k) { return k === "human_dependent" ? "human-dependent" : k; }
+
+function renderSafeguards(list) {
+  document.getElementById("safeguards").innerHTML = (list || []).map(s => `
+    <label class="sg ${s.enabled ? "" : "off"}">
+      <input type="checkbox" data-sg="${s.id}" ${s.enabled ? "checked" : ""}>
+      <span class="sg-main">
+        <span class="sg-name">${s.label}</span>
+        <span class="sg-sel"><code>${s.selector}</code> · metric <code>${s.metric}</code></span>
+      </span>
+      <span class="sg-tags">
+        <span class="pill ${s.kind}">${kindLabel(s.kind)}</span>
+        <span class="pill ${s.measures}">${s.measures}</span>
+      </span>
+    </label>`).join("");
+  document.querySelectorAll("#safeguards input[type=checkbox]").forEach(cb =>
+    cb.addEventListener("change", onToggle));
+}
+
+function onToggle(e) {
+  const id = e.target.getAttribute("data-sg");
+  if (e.target.checked) disabled.delete(id); else disabled.add(id);
+  rescore();
+}
+
 function renderScore(d) {
   document.getElementById("score").textContent = d.score.toFixed(2);
   document.getElementById("binding").textContent = d.binding;
   document.getElementById("fn").textContent = d.function.name + " v" + d.function.version;
   document.getElementById("count").textContent = d.decisions_logged;
+  renderSafeguards(d.safeguards);
 
   const bars = d.ceilings.map(c => {
     const pct = Math.round(c.ceiling * 100);
@@ -204,11 +256,13 @@ function pushLog(d) {
 }
 
 function readInputs() {
-  return {
+  const params = {
     impact: document.getElementById("impact").value,
     flakiness: (parseFloat(document.getElementById("flakiness").value) / 100).toString(),
     budget: (parseInt(document.getElementById("budget").value, 10) / 100).toString(),
   };
+  if (disabled.size) params.disabled = [...disabled].join(",");
+  return params;
 }
 function syncLabels() {
   document.getElementById("impact-v").textContent = document.getElementById("impact").value;

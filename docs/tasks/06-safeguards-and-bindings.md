@@ -1,6 +1,6 @@
 # 06 — Safeguards & bindings
 
-**Status:** todo
+**Status:** done
 **Depends on:** 04, 05
 
 ## Context

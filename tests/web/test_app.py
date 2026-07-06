@@ -18,6 +18,13 @@ def _score(app: App, **params: object) -> dict[str, object]:
     return data
 
 
+def _panel(data: dict[str, object]) -> dict[str, dict[str, object]]:
+    """The score payload's safeguard panel, keyed by safeguard id."""
+    safeguards = data["safeguards"]
+    assert isinstance(safeguards, list)
+    return {s["id"]: s for s in safeguards}
+
+
 def test_index_serves_a_populated_html_page() -> None:
     response = App().handle("GET", "/")
     assert response.status == 200
@@ -62,6 +69,32 @@ def test_every_score_appends_to_the_decision_log() -> None:
     assert len(decisions) == 2
     assert decisions[0]["remaining_budget"] == pytest.approx(0.5)  # newest first
     assert decisions[0]["action_id"] == "write-tests"
+
+
+def test_score_reports_the_governing_safeguards() -> None:
+    panel = _panel(_score(App(), impact=1, flakiness=0.004, budget=1.0))
+    assert set(panel) == {"impact", "no-flaky-tests"}
+    assert panel["no-flaky-tests"]["measures"] == "health"
+    assert all(s["enabled"] for s in panel.values())
+
+
+def test_disabling_a_binding_moves_the_float() -> None:
+    app = App()
+    # Catastrophic blast radius caps hard while impact governs...
+    capped = _score(app, impact=100, flakiness=0, budget=1.0)
+    assert capped["score"] == 0.0
+    # ...toggle it off via the registry and its ceiling no longer reaches the scorer.
+    lifted = _score(app, impact=100, flakiness=0, budget=1.0, disabled="impact")
+    assert lifted["score"] == 0.9
+    assert lifted["binding"] == "No flaky tests"
+    assert _panel(lifted)["impact"]["enabled"] is False
+
+
+def test_index_page_embeds_the_safeguards_panel() -> None:
+    body = App().handle("GET", "/").body.decode("utf-8")
+    assert "Govern → safeguards" in body
+    assert "human-dependent" in body  # kind label rendered in JS
+    assert "repo=checkout" in body  # a bound selector reaches the page
 
 
 def test_out_of_range_inputs_are_clamped() -> None:

@@ -35,11 +35,15 @@ class Response:
 
 
 class App:
-    """Holds the demo's decision log + scorer and routes requests against them."""
+    """Holds the demo's decision log and routes requests against it.
+
+    The scoring function is rebuilt per score from the registry-resolved, still-enabled safeguards
+    (task 06), so toggling a binding actually changes which ceilings reach the scorer — but every
+    score runs through a :class:`Scorer` into the one shared log, so the audit trail is continuous.
+    """
 
     def __init__(self) -> None:
         self._log = InMemoryDecisionLog()
-        self._scorer = Scorer(scenario.scoring_function(), self._log)
 
     @property
     def log(self) -> InMemoryDecisionLog:
@@ -64,15 +68,13 @@ class App:
     def _index(self, params: dict[str, list[str]] | None = None) -> Response:
         # Compute the initial score server-side and embed it, so the first paint is populated even
         # before the page's JS runs (and screenshots / deep links capture a full dashboard).
-        initial = self._score(params or {})
+        params = params or {}
+        initial = self._score(params)
         initial["recent"] = self._recent_decisions()  # seed the log panel with real history
         html = render_page(
             initial_score=initial,
             pipeline=scenario.classified_pipeline(),
-            safeguards=[
-                {"id": s.id, "label": s.label, "unit": s.unit, "rationale": s.rationale}
-                for s in scenario.SAFEGUARDS
-            ],
+            safeguards=scenario.safeguard_panel(_disabled(params)),
             flakiness_max=FLAKINESS_MAX,
             impact_max=IMPACT_MAX,
         )
@@ -82,12 +84,14 @@ class App:
         flakiness = _clamp(_param(params, "flakiness", 0.004), 0.0, FLAKINESS_MAX)
         services = _clamp(_param(params, "impact", 1.0), 0.0, IMPACT_MAX)
         budget = _clamp(_param(params, "budget", 1.0), 0.0, 1.0)
+        disabled = _disabled(params)
 
         features = scenario.assemble_features(
             flakiness=flakiness, services_affected=services, remaining_budget=budget
         )
-        decision = self._scorer.score(features)
-        breakdown = scenario.ceiling_breakdown(features)
+        scorer = Scorer(scenario.scoring_function(disabled), self._log)
+        decision = scorer.score(features)
+        breakdown = scenario.ceiling_breakdown(features, disabled)
         binding = next(row for row in breakdown if row["binding"])
 
         return {
@@ -95,6 +99,7 @@ class App:
             "function": {"name": decision.function_name, "version": decision.function_version},
             "binding": binding["label"],
             "ceilings": breakdown,
+            "safeguards": scenario.safeguard_panel(disabled),
             "features": features.to_dict(),
             "timestamp": decision.timestamp.isoformat().replace("+00:00", "Z"),
             "decisions_logged": len(self._log),
@@ -113,6 +118,14 @@ class App:
             }
             for d in decisions
         ]
+
+
+def _disabled(params: dict[str, list[str]]) -> frozenset[str]:
+    """The set of safeguard ids toggled off, from a comma-separated ``disabled`` query param."""
+    values = params.get("disabled")
+    if not values:
+        return frozenset()
+    return frozenset(sid for sid in values[0].split(",") if sid)
 
 
 def _param(params: dict[str, list[str]], name: str, default: float) -> float:

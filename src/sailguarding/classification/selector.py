@@ -75,11 +75,23 @@ class Selector:
             if command is None or not fnmatchcase(command, self.command):
                 return False
 
+        return self.matches_context(event.context)
+
+    def matches_context(self, context: Mapping[str, Any]) -> bool:
+        """True when this selector's context predicate holds for ``context`` alone.
+
+        The context half of :meth:`matches`, split out so a caller with no event — a safeguard
+        binding resolving over an ``(action, context)`` (task 06) — can evaluate the *same*
+        predicate language against a bare :class:`~sailguarding.domain.Context`. Each named
+        dimension must be present and its value glob-match; a selector that names no context
+        dimensions matches every context. The event-attribute fields (``tool``/``path``/
+        ``command``) play no part here — they describe how an *event* is recognised, not how a
+        region of context is delimited.
+        """
         for dimension, pattern in self.context.items():
-            actual = event.context.get(dimension)
+            actual = context.get(dimension)
             if actual is None or not fnmatchcase(str(actual), pattern):
                 return False
-
         return True
 
     @property

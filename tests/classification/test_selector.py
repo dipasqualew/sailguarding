@@ -100,6 +100,26 @@ def test_all_set_fields_must_hold(make_event: EventFactory) -> None:
     )
 
 
+def test_matches_context_evaluates_the_predicate_against_a_bare_mapping() -> None:
+    # The context half of matches(), reusable with no event — how safeguards bind (task 06).
+    selector = Selector(context={"repo": "checkout", "team": "*"})
+    assert selector.matches_context({"repo": "checkout", "team": "core"}) is True
+    assert selector.matches_context({"repo": "billing", "team": "core"}) is False
+    assert selector.matches_context({"repo": "checkout"}) is False  # team=* needs presence
+
+
+def test_matches_context_ignores_event_attribute_fields() -> None:
+    # tool/path/command describe how an event is recognised, not a region of context; only the
+    # context predicate participates here.
+    selector = Selector(tool="Edit", path="**/*.ts", context={"repo": "checkout"})
+    assert selector.matches_context({"repo": "checkout"}) is True
+
+
+def test_empty_selector_matches_any_context() -> None:
+    assert Selector().matches_context({}) is True
+    assert Selector().matches_context({"repo": "checkout"}) is True
+
+
 def test_context_mapping_is_copied_defensively() -> None:
     labels = {"repo": "checkout"}
     selector = Selector(context=labels)
