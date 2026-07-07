@@ -13,8 +13,10 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "==> Syncing dependencies (uv sync)"
-uv sync
+echo "==> Syncing dependencies (uv sync --all-packages)"
+# --all-packages so workspace members (the `cli` / `sg` package) and their deps are installed too,
+# not just the root engine.
+uv sync --all-packages
 
 if [[ "${1:-}" == "check" ]]; then
   echo "==> Lint (ruff check)"
