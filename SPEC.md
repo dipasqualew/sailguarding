@@ -102,6 +102,57 @@ Each safeguard is also tagged **structural vs. human-dependent** (a spending cap
 exceed vs. "I'll review the shortlist"). Human-dependent safeguards move the score less than they
 appear to, and the platform should reflect that.
 
+### The lifecycle — requested, attested, holding, expired
+
+A safeguard is not a static fact; it has a **lifecycle**, and the platform holds every stage.
+
+- **Requested.** The safeguarding team reads the traces — the observed tool events — and names a
+  control an action needs: "Bash needs ephemeral environments." That is a *requested* safeguard.
+  Requesting it does not make it true; it declares the bar and the cadence (below).
+- **Attested.** The operating team meets the bar in *their* context and supplies **evidence** through
+  an ingestion API: an attestation that the control holds for `repo=X`, carrying its **reasoning**
+  (how they know) and a **validity window**. Evidence is not only a metric — for a structural control
+  like "ephemeral environments" it is a claim plus its justification; for a health metric it is the
+  value plus when it was measured. Either way it is time-stamped and time-boxed.
+- **Holding.** While fresh evidence exists, the safeguard *holds* and lifts the delegation float as
+  its scoring allows.
+- **Expired.** The safeguarding team sets a **cadence** — how often the control must be re-evidenced
+  (weekly, per-release, per-deploy). A fresh attestation **buys allowance for exactly one window**;
+  when it lapses the safeguard stops holding and the float **decays toward the human**. This is design
+  principle 1 ("autonomy decays when safeguards do") given a concrete clock: allowance is a
+  subscription, not a one-time purchase.
+
+The consequence is that **evidence has a shelf life**. Signal derivation is freshness-aware: a
+measurement outside its window is *stale* and contributes no signal, so a safeguard with only stale
+evidence fails toward caution exactly as an unmet one does. Sending this week's evidence for `repo=X`
+buys `repo=X` a week of allowance; next week needs new data.
+
+### Capability tools and the worst case
+
+Tools split into two kinds, and they are governed differently.
+
+- A **bounded tool** acts within a declared surface: `Edit` touches a path, `Read` returns bytes.
+  Classification can recognise *what* it did, and a safeguard can bind to that.
+- A **capability tool** executes with the host process's full authority: `Bash(X)` runs arbitrary
+  code as whatever user, with whatever credentials and network reach, the harness holds. You cannot
+  govern it by inspecting `X` — that is trying to out-parse an adversarial shell, and effects hide
+  inside command substitution and pipes-into-interpreters.
+
+So for a capability you **assume the worst**: it can do anything the host process can — the **union of
+reachable authority** (credentials in the environment, network position, filesystem reach). That is
+the impact you model, and it is knowable *without reading a single command*. A team that runs the
+harness with production-write credentials in scope has a high-impact Bash whether or not any command
+ever uses them.
+
+This inverts the earned-delegation loop. For a bounded action, autonomy is *earned* by a track record
+of holding safeguards. For a capability a track record is worthless — call *N+1* can do anything call
+*N* could not — so autonomy is **bought by structural safeguards that shrink the reachable authority**:
+ephemeral sandboxes, secrets brokering, egress allowlists, operation audit. These are the requested
+safeguards; the operating team attests to them on the cadence. Good modelling here is not "what did
+this command do." It is making the team read the sentence *"this tool can do anything the host process
+can, which right now includes writing your production database,"* and showing which structural
+safeguards take that clause out of the sentence.
+
 ### Measurement: health vs. efficacy
 
 The platform is agnostic to any specific safeguard, but it forces one honest distinction per metric:
@@ -224,6 +275,13 @@ the test-writing action. Safeguards attach to that selector. Events matching no 
 triage queue a human models. The action tree and the selectors co-define each other; for the
 heuristic strategy, "classification" is just matching — no model required.
 
+**Bounded tools, not capabilities.** This bounds governance for *bounded* tools, where recognising
+the action is the whole game. A **capability tool** — `Bash`, which executes arbitrary code at the
+host process's authority — is the exception (see *Capability tools and the worst case* above): you do
+not try to predict what `Bash(X)` will do. Classification only recognises that it *is* arbitrary host
+execution; governance then moves to structural safeguards and the freshness contract, not to parsing
+the command.
+
 ## Architecture
 
 ### Harness adapters
@@ -254,6 +312,14 @@ Two things the branch default must respect:
 Operating teams wire metric sources (CI, test runners, git history for reverts/hotfixes, later
 incident tooling). The platform scores each safeguard's health and efficacy from this evidence
 against the thresholds/trends the safeguarding team declared.
+
+Ingestion is an **API**, not only a scraper. The operating team **posts attestations** — a safeguard
+id, the context, the attested value or claim, the **reasoning**, and a **validity window** derived
+from the safeguarding team's cadence. The platform time-boxes each attestation; expired evidence is
+dropped from signal derivation, so allowance lapses unless it is renewed on the cadence. Automated
+metric sources (CI, git history) are one kind of attestation the operating team wires up; a human
+posting "ephemeral envs verified for `repo=X`, valid one week" is another — the same shape, the same
+shelf life.
 
 ## Implementation order
 
@@ -307,3 +373,6 @@ against the thresholds/trends the safeguarding team declared.
 4. **Budget inheritance** — does a leaf's budget override its parent's, or compose with it?
 5. **Cross-context rollup** — how safeguard effectiveness aggregates across many repos/contexts for an
    org-level view without losing the per-context truth that makes the envelope meaningful.
+6. **Freshness & cadence semantics** — how a safeguarding team declares a cadence, how a validity
+   window attaches to an attestation, and the decay shape between fresh and expired (a cliff at
+   expiry, or a ramp as the window runs down).
