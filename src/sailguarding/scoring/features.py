@@ -1,7 +1,7 @@
 """The feature vector — the typed input the platform assembles for one score.
 
 This is the *substrate* half of the SPEC's division of labour: the platform collects the
-measured signals for an ``(action, context)`` — one per bound safeguard — plus the context it
+measured signals for an ``(activity, context)`` — one per bound safeguard — plus the context it
 ran in and the remaining error budget, and hands that whole vector to the team's scoring
 function. The platform never interprets a signal; it only assembles, serialises, and logs it.
 
@@ -24,8 +24,9 @@ from typing import Any
 from sailguarding.domain import Context
 
 # Bumped whenever the shape of a serialised FeatureVector changes. Logged with every decision
-# so a reader can tell which schema produced a stored vector.
-FEATURE_SCHEMA_VERSION = 1
+# so a reader can tell which schema produced a stored vector. v2 renamed ``action_id`` to
+# ``activity_id`` (the Action → Activity rename).
+FEATURE_SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -64,18 +65,18 @@ class FeatureVector:
     """The complete input to one score: signals, context, and remaining budget.
 
     :param signals: One :class:`SafeguardSignal` per bound safeguard, in a stable order.
-    :param context: The context dimensions the action ran in (``repo``, ``team``, ...).
+    :param context: The context dimensions the activity ran in (``repo``, ``team``, ...).
     :param remaining_budget: The fraction of the error budget still unspent, ``0.0`` (exhausted)
         to ``1.0`` (full). The platform does not enforce this range — a team's function reads it —
         but the reference example treats it as a ceiling that pulls the float toward the human.
-    :param action_id: The action being scored, if known; ``None`` when scoring a bare vector.
+    :param activity_id: The activity being scored, if known; ``None`` when scoring a bare vector.
     :param schema_version: The vector schema version; defaults to the current one.
     """
 
     signals: tuple[SafeguardSignal, ...] = ()
     context: Context = field(default_factory=Context)
     remaining_budget: float = 1.0
-    action_id: str | None = None
+    activity_id: str | None = None
     schema_version: int = FEATURE_SCHEMA_VERSION
 
     def signal(self, safeguard_id: str) -> SafeguardSignal | None:
@@ -92,7 +93,7 @@ class FeatureVector:
             "signals": [signal.to_dict() for signal in self.signals],
             "context": dict(self.context),
             "remaining_budget": self.remaining_budget,
-            "action_id": self.action_id,
+            "activity_id": self.activity_id,
         }
 
     @classmethod
@@ -108,7 +109,7 @@ class FeatureVector:
             signals=tuple(SafeguardSignal.from_dict(s) for s in data.get("signals", ())),
             context=Context(data.get("context", {})),
             remaining_budget=data.get("remaining_budget", 1.0),
-            action_id=data.get("action_id"),
+            activity_id=data.get("activity_id"),
             schema_version=version,
         )
 
@@ -132,7 +133,7 @@ def feature_vector(
     *,
     context: Context | Mapping[str, Any] | None = None,
     remaining_budget: float = 1.0,
-    action_id: str | None = None,
+    activity_id: str | None = None,
 ) -> FeatureVector:
     """Assemble a :class:`FeatureVector`, coercing ``context`` from a plain mapping if needed.
 
@@ -144,5 +145,5 @@ def feature_vector(
         signals=tuple(signals),
         context=resolved,
         remaining_budget=remaining_budget,
-        action_id=action_id,
+        activity_id=activity_id,
     )

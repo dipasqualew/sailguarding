@@ -43,7 +43,7 @@ def test_captured_record_matches_the_simulated_tool_call(
                 git_commit="a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
             ),
             timestamp=FROZEN_NOW,
-            action_id=None,
+            activity_id=None,
         )
     ]
 
@@ -60,9 +60,9 @@ def test_record_is_captured_unclassified(
     mock.dispatch_in_process(invocation, storage=sink, git=frozen_git, clock=clock)
 
     (record,) = sink.scan()
-    assert record.action_id is None
+    assert record.activity_id is None
     assert record.harness_id == "claude-code"
-    assert record.schema_version == 1
+    assert record.schema_version == 2
 
 
 def test_record_carries_the_work_unit_correlation_key(

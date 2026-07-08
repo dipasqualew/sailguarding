@@ -6,14 +6,14 @@ system imports from. See :mod:`sailguarding.domain`.
 
 from sailguarding.domain import (
     SCHEMA_VERSION,
-    Action,
+    Activity,
     Context,
     EventRecord,
 )
 
 __all__ = [
     "SCHEMA_VERSION",
-    "Action",
+    "Activity",
     "Context",
     "EventRecord",
 ]

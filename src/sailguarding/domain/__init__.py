@@ -1,11 +1,11 @@
 """Core domain types shared across the whole system.
 
 Every other task imports from here. The types are deliberately domain-agnostic: the same
-:class:`Context` / :class:`Action` / :class:`EventRecord` describe a code edit and a sofa
+:class:`Context` / :class:`Activity` / :class:`EventRecord` describe a code edit and a sofa
 purchase.
 """
 
-from sailguarding.domain.action import Action
+from sailguarding.domain.activity import Activity
 from sailguarding.domain.context import Context, DimensionValue
 from sailguarding.domain.event import SCHEMA_VERSION, EventRecord
 from sailguarding.domain.serialization import (
@@ -17,7 +17,7 @@ from sailguarding.domain.serialization import (
 
 __all__ = [
     "SCHEMA_VERSION",
-    "Action",
+    "Activity",
     "Context",
     "DimensionValue",
     "EventRecord",

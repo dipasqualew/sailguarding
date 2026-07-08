@@ -1,6 +1,6 @@
 # 09 — Attestation & the freshness contract
 
-**Status:** todo
+**Status:** done
 **Depends on:** 06, 08
 
 ## Context

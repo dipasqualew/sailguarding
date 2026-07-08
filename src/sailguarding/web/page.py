@@ -1,9 +1,9 @@
-"""Renders the single, self-contained dashboard page.
+"""Renders the single, self-contained activity-model editor page.
 
-One string of HTML with inline CSS and JS — no build step, no external assets, no CDN — matching
-the engine's stdlib-only, offline-friendly posture. Server-computed initial state is embedded as
-``window.__INITIAL__`` so the first paint is fully populated before any fetch runs; moving a slider
-re-scores against the live API.
+One string of HTML with inline CSS and JS — no build step, no external assets, no CDN — matching the
+engine's stdlib-only, offline-friendly posture. The current view model is embedded as
+``window.__MODEL__`` so the first paint is fully populated before any fetch runs; every edit POSTs a
+mutation and re-renders from the model the server returns.
 
 The template uses opaque ``__TOKEN__`` placeholders filled by :func:`render_page`, so the CSS/JS
 braces need no escaping.
@@ -12,7 +12,6 @@ braces need no escaping.
 from __future__ import annotations
 
 import json
-from html import escape
 from typing import Any
 
 _TEMPLATE = """<!doctype html>
@@ -20,442 +19,599 @@ _TEMPLATE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>sailguarding — delegation scoring</title>
+<title>sailguarding — activity model</title>
 <style>
 :root {
   color-scheme: light dark;
   --bg: #0f1216; --panel: #171b21; --panel-2: #1e242c; --line: #2a323c;
   --ink: #e7edf3; --muted: #9aa7b4; --accent: #5ac8fa; --good: #4ade80;
-  --warn: #fbbf24; --bad: #f87171; --bar-bg: #232b34;
+  --warn: #fbbf24; --bad: #f87171; --sel: #22303c; --chip: #202832;
 }
 @media (prefers-color-scheme: light) {
   :root {
     --bg: #f4f6f9; --panel: #ffffff; --panel-2: #f0f3f7; --line: #dce2ea;
     --ink: #16202b; --muted: #5c6b7a; --accent: #0a84c2; --good: #16a34a;
-    --warn: #b45309; --bad: #dc2626; --bar-bg: #e6ebf1;
+    --warn: #b45309; --bad: #dc2626; --sel: #e2edf6; --chip: #eef2f7;
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0f1216; --panel: #171b21; --panel-2: #1e242c; --line: #2a323c;
+  --ink: #e7edf3; --muted: #9aa7b4; --accent: #5ac8fa; --good: #4ade80;
+  --warn: #fbbf24; --bad: #f87171; --sel: #22303c; --chip: #202832;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f4f6f9; --panel: #ffffff; --panel-2: #f0f3f7; --line: #dce2ea;
+  --ink: #16202b; --muted: #5c6b7a; --accent: #0a84c2; --good: #16a34a;
+  --warn: #b45309; --bad: #dc2626; --sel: #e2edf6; --chip: #eef2f7;
 }
 * { box-sizing: border-box; }
 body {
   margin: 0; background: var(--bg); color: var(--ink);
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
-.wrap { max-width: 1040px; margin: 0 auto; padding: 32px 20px 64px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 20px 72px; }
+header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 header h1 { margin: 0 0 4px; font-size: 22px; letter-spacing: -0.01em; }
-header p { margin: 0; color: var(--muted); }
-.tag { display: inline-block; font-size: 12px; color: var(--muted); border: 1px solid var(--line);
-  border-radius: 999px; padding: 1px 9px; margin-left: 8px; vertical-align: middle; }
-.grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 20px; margin-top: 24px; }
-@media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
-.panel h2 { margin: 0 0 2px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
+header h1 .tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 1px 9px; margin-left: 8px; vertical-align: middle; font-weight: 400; }
+header p { margin: 0; color: var(--muted); max-width: 74ch; }
+.theme-toggle { flex: none; background: var(--panel); color: var(--muted); border: 1px solid var(--line);
+  border-radius: 999px; padding: 6px 13px; font: inherit; font-size: 13px; cursor: pointer; }
+.theme-toggle:hover { color: var(--ink); border-color: var(--accent); }
+
+.toast { position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%) translateY(20px);
+  background: var(--bad); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.28); opacity: 0; pointer-events: none; transition: all .2s ease; z-index: 50; }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+.grid { display: grid; grid-template-columns: 1fr 1.15fr; gap: 20px; margin-top: 22px; align-items: start; }
+@media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 20px; }
+.panel > h2 { margin: 0 0 2px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--muted); font-weight: 600; }
-.panel .sub { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
-.panel .sub .src { display: inline-block; margin-left: 4px; font-style: italic; opacity: .85; }
+.panel > .sub { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
 
-.floatbox { display: flex; align-items: baseline; gap: 14px; margin: 6px 0 4px; }
-.floatbox .num { font-size: 54px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
-.floatbox .of { color: var(--muted); font-size: 15px; }
-.binding { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
-.binding b { color: var(--ink); }
+/* --- Tree ------------------------------------------------------------------------------------- */
+.tree { display: flex; flex-direction: column; gap: 3px; }
+.node-row { display: flex; align-items: center; gap: 6px; border-radius: 9px; padding: 6px 8px;
+  cursor: pointer; border: 1px solid transparent; transition: background .12s ease; }
+.node-row:hover { background: var(--panel-2); }
+.node-row.selected { background: var(--sel); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.caret { flex: none; width: 16px; height: 16px; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 10px; border: 0; background: none; cursor: pointer; transition: transform .12s ease; }
+.caret.spacer { visibility: hidden; }
+.caret.collapsed { transform: rotate(-90deg); }
+.node-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.node-badges { display: flex; gap: 5px; flex: none; }
+.badge { font-size: 11px; font-variant-numeric: tabular-nums; border-radius: 999px; padding: 0 7px;
+  line-height: 18px; border: 1px solid var(--line); color: var(--muted); background: var(--chip); }
+.badge.risk { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.badge.mit { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
+.badge:empty { display: none; }
+.node-actions { display: none; gap: 2px; flex: none; }
+.node-row:hover .node-actions, .node-row.selected .node-actions { display: flex; }
+.icon-btn { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px;
+  width: 24px; height: 24px; border-radius: 6px; line-height: 1; }
+.icon-btn:hover { background: var(--panel); color: var(--ink); }
+.icon-btn.danger:hover { color: var(--bad); }
+.rename-input, .inline-input { font: inherit; font-size: 14px; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--accent); border-radius: 7px; padding: 4px 8px; width: 100%; }
+.tree-add { margin-top: 12px; }
+.empty { text-align: center; color: var(--muted); padding: 26px 10px; }
+.empty p { margin: 0 0 12px; }
 
-.control { margin: 14px 0; }
-.control label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
-.control label .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
-input[type=range] { width: 100%; accent-color: var(--accent); }
+.btn { font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel-2); color: var(--ink); padding: 7px 12px; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: #06222f; border-color: var(--accent); }
+.btn.primary:hover { filter: brightness(1.07); }
+.btn.small { padding: 4px 9px; font-size: 12px; }
+.btn.ghost { background: none; border-style: dashed; color: var(--muted); }
+.btn.ghost:hover { color: var(--ink); }
 
-.bars { margin-top: 18px; display: grid; gap: 10px; }
-.bar { display: grid; grid-template-columns: 150px 1fr 48px; align-items: center; gap: 10px; font-size: 13px; }
-.bar .name { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.bar .name.bind { color: var(--ink); font-weight: 600; }
-.track { display: block; background: var(--bar-bg); border-radius: 6px; height: 14px; overflow: hidden; }
-.fill { display: block; height: 100%; border-radius: 6px; background: var(--good); transition: width .18s ease; }
-.fill.bind { background: var(--accent); }
-.fill.low { background: var(--bad); }
-.cap { text-align: right; font-variant-numeric: tabular-nums; }
-.rationale { font-size: 11px; color: var(--muted); grid-column: 2 / 4; margin-top: -4px; }
-
-.series-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 640px) { .series-grid { grid-template-columns: 1fr; } }
-.series { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 13px 14px; }
-.series.drives { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.series-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
-.series-head .series-metric { color: var(--muted); font-size: 12px; }
-.series-head .series-cur { margin-left: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
-.series svg { display: block; width: 100%; height: 46px; }
-.series .spark { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.series.eff .spark { stroke: var(--warn); }
-.series .spark-dot { fill: var(--accent); }
-.series.eff .spark-dot { fill: var(--warn); }
-.series-foot { font-size: 11px; color: var(--muted); margin-top: 8px; }
-.series-foot b { color: var(--ink); }
-.ingest { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
-.ingest select { background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
-  border-radius: 8px; padding: 7px 10px; font: inherit; font-size: 13px; }
-.ingest input[type=range] { flex: 1; min-width: 140px; }
-.ingest .val { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; min-width: 56px; }
-.ingest button { background: var(--accent); color: #06222f; border: 0; border-radius: 8px;
-  padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
-.ingest button:hover { filter: brightness(1.07); }
-
-.table-scroll { overflow-x: auto; }
-table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
-th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line);
-  vertical-align: top; overflow-wrap: anywhere; }
-th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
-td code { font-size: 12px; color: var(--ink); }
-#pipeline th:nth-child(1), #pipeline td:nth-child(1) { width: 11%; }
-#pipeline th:nth-child(2), #pipeline td:nth-child(2) { width: 55%; }
-#pipeline th:nth-child(3), #pipeline td:nth-child(3) { width: 19%; }
-#pipeline th:nth-child(4), #pipeline td:nth-child(4) { width: 15%; }
-.pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
-.pill.matched { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
-.pill.unmatched { color: var(--muted); }
-.pill.ambiguous { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
+/* --- Detail ----------------------------------------------------------------------------------- */
+.detail-title { font-size: 18px; font-weight: 700; margin: 0 0 2px; letter-spacing: -0.01em; }
+.detail-path { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
+.risk-card { border: 1px solid var(--line); border-radius: 11px; background: var(--panel-2); margin-bottom: 10px; }
+.risk-head { display: flex; align-items: center; gap: 10px; padding: 11px 13px; cursor: pointer; }
+.risk-head .caret { color: var(--muted); }
+.risk-name { font-weight: 600; flex: 1; min-width: 0; }
+.reuse { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px;
+  padding: 0 8px; line-height: 18px; white-space: nowrap; }
+.risk-body { padding: 0 13px 13px 35px; display: none; }
+.risk-card.open .risk-body { display: block; }
+.risk-card.open .risk-head .caret { transform: none; }
+.risk-card .risk-head .caret { transform: rotate(-90deg); }
+.sg-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; border-top: 1px solid var(--line); }
+.sg-row:first-child { border-top: 0; }
+.sg-name { font-weight: 500; }
+.sg-none { color: var(--muted); font-size: 13px; padding: 7px 0; }
+.pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line);
+  white-space: nowrap; color: var(--muted); }
 .pill.structural { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
 .pill.human_dependent { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
 .pill.health { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .pill.efficacy { color: var(--ink); border-color: var(--muted); }
+.spacer-x { flex: 1; }
 
-.sg-list { display: grid; gap: 10px; }
-.sg { display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 12px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px;
-  padding: 11px 13px; cursor: pointer; transition: opacity .15s ease; }
-.sg.off { opacity: 0.45; }
-.sg input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
-.sg .sg-name { font-weight: 600; }
-.sg .sg-sel { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
-.sg .sg-sel code { font-size: 12px; }
-.sg .sg-tags { display: flex; gap: 6px; white-space: nowrap; }
+.picker { margin-top: 8px; padding: 12px; border: 1px dashed var(--line); border-radius: 10px; background: var(--panel); }
+.picker.hidden { display: none; }
+.picker .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 8px; }
+.picker .row:last-child { margin-bottom: 0; }
+.picker label { font-size: 12px; color: var(--muted); }
+select, input[type=text] { font: inherit; font-size: 13px; background: var(--bg); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; }
+input[type=text] { flex: 1; min-width: 150px; }
+select { flex: 1; min-width: 140px; }
+.picker-tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+.picker-tabs button { font: inherit; font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 7px;
+  border: 1px solid var(--line); background: none; color: var(--muted); cursor: pointer; }
+.picker-tabs button.active { background: var(--panel-2); color: var(--ink); border-color: var(--accent); }
 
-.tree { display: grid; gap: 8px; }
-.node { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 12px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 13px; }
-.node.demo { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
-.node .n-name { font-weight: 600; }
-.node .n-name .twig { color: var(--muted); font-weight: 400; }
-.node .n-budget { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.node .n-rem { font-variant-numeric: tabular-nums; font-weight: 700; }
-.pill.declared { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
-.pill.inherited { color: var(--muted); }
-.pill.demo { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
-.override { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--muted); cursor: pointer; }
-.override input { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
-
-.log { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-height: 320px; overflow: auto; }
-.log li { display: flex; justify-content: space-between; align-items: center; gap: 10px;
-  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; }
-.log .s { font-weight: 700; font-variant-numeric: tabular-nums; }
-.log .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
-.count { color: var(--muted); font-size: 12px; margin: 0 0 12px; }
-footer { margin-top: 28px; color: var(--muted); font-size: 12px; }
+/* --- Library ---------------------------------------------------------------------------------- */
+.lib-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px; }
+@media (max-width: 720px) { .lib-grid { grid-template-columns: 1fr; } }
+.lib-list { display: flex; flex-direction: column; gap: 8px; }
+.lib-item { display: flex; align-items: center; gap: 10px; background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 12px; }
+.lib-item .lib-name { font-weight: 600; }
+.lib-item .lib-desc { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.lib-item .lib-tags { display: flex; gap: 6px; }
+.usedby { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; line-height: 18px; white-space: nowrap; }
+.usedby.shared { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.lib-empty { color: var(--muted); font-size: 13px; }
+footer { margin-top: 30px; color: var(--muted); font-size: 12px; }
 footer code { color: var(--ink); }
 </style>
 </head>
 <body>
 <div class="wrap">
   <header>
-    <h1>sailguarding <span class="tag">delegation scoring demo</span></h1>
-    <p>How much of this action should the agent do? The float is computed by the team's scoring
-      function — the platform only assembles the inputs and logs the decision.</p>
+    <div>
+      <h1>sailguarding <span class="tag">activity model</span></h1>
+      <p>Model the work you hand to agents as a tree of activities, the risks each faces, and the
+        safeguards that mitigate them. Risks and safeguards live in shared libraries — reuse one and
+        watch its coverage count climb.</p>
+    </div>
+    <button class="theme-toggle" id="theme-toggle">Theme</button>
   </header>
 
-  <div class="panel" style="margin-top:24px">
-    <h2>Observe → classify <span class="tag">tasks 01–04</span></h2>
-    <p class="sub">Raw tool events resolved to actions by the deterministic selector engine.
-      <span class="src">__PIPELINE_SOURCE__</span></p>
-    <div class="table-scroll">
-      <table id="pipeline"><thead><tr><th>Tool</th><th>Input</th><th>Outcome</th><th>Action</th></tr></thead>
-        <tbody></tbody></table>
-    </div>
-  </div>
-
-  <div class="panel" style="margin-top:20px">
-    <h2>Govern → safeguards <span class="tag">task 06</span></h2>
-    <p class="sub">The binding registry resolves which safeguards govern
-      <code>write-tests</code> in <code>repo=checkout</code>. Each carries its structural /
-      human-dependent tag and health / efficacy label. Toggle one off to remove its ceiling from
-      the score — proof that the registry decides what reaches the scorer.</p>
-    <div class="sg-list" id="safeguards"></div>
-  </div>
-
-  <div class="panel" style="margin-top:20px">
-    <h2>Govern → action tree &amp; budgets <span class="tag">task 07</span></h2>
-    <p class="sub">The demo action <code>write-tests</code> is a leaf of a real tree. A budget
-      declared on the parent <b>inherits</b> down to the leaf; an explicit leaf <b>override</b>
-      wins. The <b>resolved</b> budget of the leaf is exactly the <code>remaining_budget</code> the
-      scorer reads — so the tree drives the float. Move the parent budget slider below, or toggle
-      the override.</p>
-    <div class="tree" id="tree"></div>
-    <label class="override"><input type="checkbox" id="override">
-      Declare an explicit <code>write-tests</code> override (__OVERRIDE_PCT__% remaining) — watch it
-      win over the inherited parent budget</label>
-  </div>
-
-  <div class="panel" style="margin-top:20px">
-    <h2>Measure → evidence <span class="tag">task 08</span></h2>
-    <p class="sub">The <code>no-flaky-tests</code> signal is <b>derived from ingested evidence</b>,
-      not a slider. Two series are kept and <b>never conflated</b>: <b>health</b> (flakiness — a
-      cheap leading proxy that sets the ceiling) and <b>efficacy</b> (catch rate — the lagging
-      truth, tracked but never scored). Ingest a health point and watch the signal — and its ceiling
-      on the float — move; ingest an efficacy point and the float stays put.</p>
-    <div class="series-grid" id="evidence"></div>
-    <div class="ingest">
-      <select id="ingest-kind">
-        <option value="health">Health · flakiness</option>
-        <option value="efficacy">Efficacy · catch rate</option>
-      </select>
-      <input type="range" id="ingest-value">
-      <span class="val"><span id="ingest-v"></span><span id="ingest-unit">%</span></span>
-      <button id="ingest-btn">Ingest measurement</button>
-    </div>
-  </div>
-
   <div class="grid">
-    <div class="panel">
-      <h2>Score → delegation float <span class="tag">task 05</span></h2>
-      <p class="sub">min-composition: each safeguard sets a ceiling; the weakest binds. Move the
-        inputs — watch impact cap hard and budget pull the float down. Flakiness is no longer a
-        slider: it is the latest health measurement from the evidence panel above.</p>
-
-      <div class="floatbox"><span class="num" id="score">0.00</span><span class="of">/ 1.00 delegation</span></div>
-      <p class="binding">Binding constraint: <b id="binding">—</b> · <span id="fn">min-composition</span></p>
-
-      <div class="control">
-        <label>Blast radius <span class="val"><span id="impact-v"></span> svc</span></label>
-        <input type="range" id="impact" min="0" max="__IMPACT_MAX__" step="1">
+    <section class="panel">
+      <h2>Activity tree</h2>
+      <p class="sub">Click a node to inspect it. Hover for add / rename / delete.</p>
+      <div class="tree" id="tree"></div>
+      <div class="tree-add">
+        <button class="btn ghost small" id="add-root">＋ Add root activity</button>
       </div>
-      <div class="control">
-        <label>Parent (root) error budget <span class="val"><span id="budget-v"></span>%</span></label>
-        <input type="range" id="budget" min="0" max="100" step="1">
-      </div>
+    </section>
 
-      <div class="bars" id="bars"></div>
-    </div>
-
-    <div class="panel">
-      <h2>Decision log <span class="tag">auditable</span></h2>
-      <p class="sub">Every score is logged with its inputs, function version, and timestamp — so
-        "why 0.90?" is answerable months later.</p>
-      <p class="count"><span id="count">0</span> decisions this session</p>
-      <ul class="log" id="log"></ul>
-    </div>
+    <section class="panel" id="detail">
+      <h2>Selected activity</h2>
+      <p class="sub">Its risks, and the safeguards assigned to each.</p>
+      <div id="detail-body"></div>
+    </section>
   </div>
+
+  <section class="lib-grid">
+    <div class="panel">
+      <h2>Risk library</h2>
+      <p class="sub">Named once, faced by many. The count is how many activities reference each.</p>
+      <div class="lib-list" id="risk-lib"></div>
+    </div>
+    <div class="panel">
+      <h2>Safeguard library</h2>
+      <p class="sub">One control can mitigate a risk across many activities — that is reuse.</p>
+      <div class="lib-list" id="safeguard-lib"></div>
+    </div>
+  </section>
 
   <footer>
-    Stdlib-only, zero-dependency. Served by <code>python -m sailguarding.web</code>. The scorer,
-    classifier, and decision log are the real engine — this page is only a view.
+    Stdlib-only, zero-dependency. Served by <code>python -m sailguarding.web</code>. Every edit runs a
+    real <code>ActivityModel</code> transform on the server and re-renders from the result.
   </footer>
 </div>
 
+<div class="toast" id="toast"></div>
+
 <script>
-const INITIAL = window.__INITIAL__ = __INITIAL_JSON__;
-const PIPELINE = __PIPELINE_JSON__;
-const FLAKINESS_MAX = __FLAKINESS_MAX__;   // fraction
-const SAFEGUARDS = __SAFEGUARDS_JSON__;
+"use strict";
+let MODEL = window.__MODEL__ = __MODEL_JSON__;
+let selectedId = null;
+const collapsed = new Set();       // activity ids whose children are hidden
+const openRisks = new Set();       // "activityId::riskId" rows expanded in the detail pane
 
-function renderPipeline() {
-  const tb = document.querySelector("#pipeline tbody");
-  tb.innerHTML = PIPELINE.map(r => `<tr>
-    <td><code>${r.tool}</code></td>
-    <td><code>${r.input}</code></td>
-    <td><span class="pill ${r.outcome}">${r.outcome}</span></td>
-    <td>${r.action_id ? "<code>"+r.action_id+"</code>" : "—"}</td></tr>`).join("");
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove("show"), 2600);
 }
 
-const disabled = new Set();  // safeguard ids toggled off; drives which ceilings reach the scorer
-
-function kindLabel(k) { return k === "human_dependent" ? "human-dependent" : k; }
-
-function renderSafeguards(list) {
-  document.getElementById("safeguards").innerHTML = (list || []).map(s => `
-    <label class="sg ${s.enabled ? "" : "off"}">
-      <input type="checkbox" data-sg="${s.id}" ${s.enabled ? "checked" : ""}>
-      <span class="sg-main">
-        <span class="sg-name">${s.label}</span>
-        <span class="sg-sel"><code>${s.selector}</code> · metric <code>${s.metric}</code></span>
-      </span>
-      <span class="sg-tags">
-        <span class="pill ${s.kind}">${kindLabel(s.kind)}</span>
-        <span class="pill ${s.measures}">${s.measures}</span>
-      </span>
-    </label>`).join("");
-  document.querySelectorAll("#safeguards input[type=checkbox]").forEach(cb =>
-    cb.addEventListener("change", onToggle));
+// --- API: every mutation POSTs JSON and re-renders from the returned model. --------------------
+async function api(path, body) {
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json();
+    if (!res.ok) { toast(data.error || ("request failed (" + res.status + ")")); return null; }
+    MODEL = window.__MODEL__ = data.model;
+    render();
+    return data;
+  } catch (e) {
+    toast("network error — is the server still running?");
+    return null;
+  }
 }
 
-function onToggle(e) {
-  const id = e.target.getAttribute("data-sg");
-  if (e.target.checked) disabled.delete(id); else disabled.add(id);
-  rescore();
+// --- Lookups over the flat view model. ---------------------------------------------------------
+const activityById = (id) => MODEL.activities.find((a) => a.id === id) || null;
+const riskById = (id) => MODEL.risks.find((r) => r.id === id) || null;
+const safeguardById = (id) => MODEL.safeguards.find((s) => s.id === id) || null;
+const topLevel = () => MODEL.activities.filter((a) => a.parent_id === null);
+const childrenOf = (id) => MODEL.activities.filter((a) => a.parent_id === id);
+const risksForActivity = (aid) =>
+  MODEL.activity_risks.filter((e) => e[0] === aid).map((e) => riskById(e[1])).filter(Boolean);
+const safeguardsForRisk = (aid, rid) =>
+  MODEL.mitigations.filter((e) => e[0] === aid && e[1] === rid)
+    .map((e) => safeguardById(e[2])).filter(Boolean);
+const kindLabel = (k) => (k === "human_dependent" ? "human-dependent" : k);
+
+// --- Tree pane. --------------------------------------------------------------------------------
+function renderTree() {
+  const root = $("tree");
+  const tops = topLevel();
+  if (!tops.length) {
+    root.innerHTML =
+      '<div class="empty"><p>No activities yet.</p>' +
+      '<button class="btn primary" id="empty-add">Add your first activity</button></div>';
+    $("empty-add").onclick = () => addActivity(null);
+    return;
+  }
+  root.innerHTML = "";
+  tops.forEach((n) => root.appendChild(nodeEl(n)));
 }
 
-function renderTree(nodes) {
-  document.getElementById("tree").innerHTML = (nodes || []).map(n => {
-    const rem = n.remaining === null ? "—" : Math.round(n.remaining * 100) + "%";
-    const badge = n.source === "declared"
-      ? `<span class="pill declared">declared</span>`
-      : (n.source === "inherited" ? `<span class="pill inherited">inherited</span>` : "");
-    const twig = n.depth > 0 ? "&nbsp;".repeat((n.depth - 1) * 4) + "└─ " : "";
-    const demo = n.is_demo ? ` <span class="pill demo">scored</span>` : "";
-    return `<div class="node ${n.is_demo ? "demo" : ""}">
-      <span class="n-name"><span class="twig">${twig}</span>${n.label}${demo}</span>
-      <span class="n-budget">${badge}<span class="n-rem">${rem}</span></span>
-    </div>`;
-  }).join("");
+function nodeEl(node) {
+  const wrap = document.createElement("div");
+  const row = document.createElement("div");
+  row.className = "node-row" + (node.id === selectedId ? " selected" : "");
+  row.style.paddingLeft = (8 + node.depth * 18) + "px";
+  row.onclick = () => selectActivity(node.id);
+
+  const kids = childrenOf(node.id);
+  const isCollapsed = collapsed.has(node.id);
+  const caret = document.createElement("button");
+  caret.className = "caret" + (kids.length ? "" : " spacer") + (isCollapsed ? " collapsed" : "");
+  caret.textContent = "▾";
+  caret.onclick = (e) => { e.stopPropagation(); toggleCollapse(node.id); };
+
+  const label = document.createElement("span");
+  label.className = "node-label";
+  label.textContent = node.label || "(untitled)";
+
+  const badges = document.createElement("span");
+  badges.className = "node-badges";
+  badges.innerHTML =
+    (node.risk_count ? '<span class="badge risk" title="risks faced">⚠ ' + node.risk_count + "</span>" : "") +
+    (node.mitigation_count ? '<span class="badge mit" title="mitigations">✓ ' + node.mitigation_count + "</span>" : "");
+
+  const actions = document.createElement("span");
+  actions.className = "node-actions";
+  actions.appendChild(iconBtn("＋", "Add child", (e) => { e.stopPropagation(); addActivity(node.id); }));
+  actions.appendChild(iconBtn("✎", "Rename", (e) => { e.stopPropagation(); beginRename(row, node); }));
+  actions.appendChild(iconBtn("✕", "Delete", (e) => { e.stopPropagation(); deleteActivity(node); }, true));
+
+  row.append(caret, label, badges, actions);
+  wrap.appendChild(row);
+
+  if (kids.length && !isCollapsed) {
+    kids.forEach((c) => wrap.appendChild(nodeEl(c)));
+  }
+  return wrap;
 }
 
-function sparkline(points) {
-  const W = 240, H = 46, P = 5;
-  if (!points || !points.length) return `<svg viewBox="0 0 ${W} ${H}"></svg>`;
-  const vals = points.map(p => p.value);
-  const lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
-  const x = i => P + (points.length === 1 ? (W - 2*P)/2 : (i/(points.length-1))*(W - 2*P));
-  const y = v => P + (1 - (v - lo)/span) * (H - 2*P);
-  const path = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" ");
-  const li = points.length - 1;
-  return `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <polyline class="spark" points="${path}"/>
-    <circle class="spark-dot" cx="${x(li).toFixed(1)}" cy="${y(points[li].value).toFixed(1)}" r="3"/>
-  </svg>`;
+function iconBtn(glyph, title, onClick, danger) {
+  const b = document.createElement("button");
+  b.className = "icon-btn" + (danger ? " danger" : "");
+  b.textContent = glyph;
+  b.title = title;
+  b.onclick = onClick;
+  return b;
 }
 
-function fmtSeries(s) {
-  if (s.current === null) return "—";
-  return s.measures === "health"
-    ? (s.current * 100).toFixed(2) + "%"
-    : (s.current * 100).toFixed(0) + "%";
+function toggleCollapse(id) {
+  if (collapsed.has(id)) collapsed.delete(id); else collapsed.add(id);
+  renderTree();
 }
 
-function renderEvidence(ev) {
-  if (!ev) return;
-  const seriesCard = (s, label) => `
-    <div class="series ${s.measures === "efficacy" ? "eff" : ""} ${s.drives_ceiling ? "drives" : ""}">
-      <div class="series-head">
-        <span class="pill ${s.measures}">${s.measures}</span>
-        <span class="series-metric">${s.metric}</span>
-        <span class="series-cur">${fmtSeries(s)}</span>
-      </div>
-      ${sparkline(s.points)}
-      <div class="series-foot">${s.drives_ceiling
-        ? `ceiling on float: <b>${s.ceiling === null ? "—" : s.ceiling.toFixed(2)}</b> · drives the score`
-        : `lagging truth · tracked, never scored`}</div>
-    </div>`;
-  document.getElementById("evidence").innerHTML =
-    seriesCard(ev.health) + seriesCard(ev.efficacy);
-}
+function selectActivity(id) { selectedId = id; render(); }
 
-function renderScore(d) {
-  document.getElementById("score").textContent = d.score.toFixed(2);
-  document.getElementById("binding").textContent = d.binding;
-  document.getElementById("fn").textContent = d.function.name + " v" + d.function.version;
-  document.getElementById("count").textContent = d.decisions_logged;
-  renderSafeguards(d.safeguards);
-  renderEvidence(d.evidence);
-  renderTree(d.tree);
-
-  const bars = d.ceilings.map(c => {
-    const pct = Math.round(c.ceiling * 100);
-    const cls = c.binding ? "bind" : (c.ceiling < 0.34 ? "low" : "");
-    const val = c.id === "remaining-budget" || c.unit === "%"
-      ? Math.round(c.value * (c.id === "remaining-budget" ? 100 : 100)) + c.unit
-      : (c.value + c.unit);
-    return `<div class="bar">
-      <span class="name ${c.binding ? "bind" : ""}">${c.label}</span>
-      <span class="track"><span class="fill ${cls}" style="width:${pct}%"></span></span>
-      <span class="cap">${c.ceiling.toFixed(2)}</span>
-      <span class="rationale">${c.rationale}</span>
-    </div>`;
-  }).join("");
-  document.getElementById("bars").innerHTML = bars;
-}
-
-let logItems = [];
-function renderLog() {
-  document.getElementById("log").innerHTML = logItems.map(i => `<li>
-    <span class="s">${i.score.toFixed(2)}</span>
-    <span class="meta">budget ${Math.round(i.budget*100)}% · v${i.v} · ${i.ts.slice(11,19)}Z</span>
-  </li>`).join("");
-}
-function seedLog(recent) {
-  logItems = (recent || []).map(r => ({ score: r.score, v: r.function_version,
-    ts: r.timestamp, budget: r.remaining_budget }));
-  renderLog();
-}
-function pushLog(d) {
-  logItems.unshift({ score: d.score, v: d.function.version, ts: d.timestamp,
-                     budget: d.features.remaining_budget });
-  logItems = logItems.slice(0, 12);
-  renderLog();
-}
-
-function readInputs() {
-  const params = {
-    impact: document.getElementById("impact").value,
-    budget: (parseInt(document.getElementById("budget").value, 10) / 100).toString(),
+function beginRename(row, node) {
+  const input = document.createElement("input");
+  input.className = "rename-input";
+  input.value = node.label;
+  row.innerHTML = "";
+  row.style.paddingLeft = (8 + node.depth * 18) + "px";
+  row.appendChild(input);
+  input.focus();
+  input.select();
+  let done = false;
+  const commit = async () => {
+    if (done) return; done = true;
+    const label = input.value.trim();
+    if (label && label !== node.label) await api("/api/activity/rename", { id: node.id, label });
+    else render();
   };
-  if (disabled.size) params.disabled = [...disabled].join(",");
-  if (document.getElementById("override").checked) params.override = "1";
-  return params;
-}
-function syncLabels() {
-  document.getElementById("impact-v").textContent = document.getElementById("impact").value;
-  document.getElementById("budget-v").textContent = document.getElementById("budget").value;
+  input.onkeydown = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); commit(); }
+    else if (e.key === "Escape") { done = true; render(); }
+  };
+  input.onblur = commit;
 }
 
-let timer = null;
-async function rescore() {
-  syncLabels();
-  const q = new URLSearchParams(readInputs()).toString();
-  const res = await fetch("/api/score?" + q);
-  const d = await res.json();
-  renderScore(d); pushLog(d);
-}
-function onInput() { clearTimeout(timer); syncLabels(); timer = setTimeout(rescore, 90); }
-
-// --- Ingest control: append one measurement, then re-score against the new evidence history. ---
-const FLAKINESS_MAX_PCT = FLAKINESS_MAX * 100;  // health slider tops out at the demo's flakiness cap
-function ingestScale() {
-  // Health (flakiness) lives in a tight 0–5% band; efficacy (catch rate) spans 0–100%.
-  const health = document.getElementById("ingest-kind").value === "health";
-  const slider = document.getElementById("ingest-value");
-  slider.min = 0; slider.max = health ? FLAKINESS_MAX_PCT : 100;
-  slider.step = health ? 0.1 : 1;
-  if (parseFloat(slider.value) > slider.max) slider.value = slider.max;
-  document.getElementById("ingest-unit").textContent = "%";
-  syncIngestLabel();
-}
-function syncIngestLabel() {
-  const health = document.getElementById("ingest-kind").value === "health";
-  const v = parseFloat(document.getElementById("ingest-value").value);
-  document.getElementById("ingest-v").textContent = health ? v.toFixed(1) : v.toFixed(0);
-}
-async function ingest() {
-  const kind = document.getElementById("ingest-kind").value;
-  const pct = parseFloat(document.getElementById("ingest-value").value);
-  const params = Object.assign(readInputs(), { kind, value: (pct / 100).toString() });
-  const res = await fetch("/api/ingest?" + new URLSearchParams(params).toString());
-  const d = await res.json();
-  renderScore(d); pushLog(d);
+async function addActivity(parentId) {
+  const data = await api("/api/activity/add", { parent_id: parentId, label: "New activity" });
+  if (data && data.created_id) {
+    if (parentId) collapsed.delete(parentId);
+    selectedId = data.created_id;
+    render();
+    // Drop the fresh node straight into rename so the placeholder is never left behind.
+    const row = document.querySelector(".node-row.selected");
+    const node = activityById(data.created_id);
+    if (row && node) beginRename(row, node);
+  }
 }
 
-// Seed sliders from the server-computed initial features, then paint from embedded state.
+async function deleteActivity(node) {
+  const kids = childrenOf(node.id).length;
+  const warn = kids
+    ? '"' + node.label + '" and its ' + kids + " sub-activit" + (kids === 1 ? "y" : "ies")
+    : '"' + node.label + '"';
+  if (!confirm("Delete " + warn + "? This also removes its risk and mitigation links.")) return;
+  if (selectedId === node.id) selectedId = null;
+  await api("/api/activity/delete", { id: node.id });
+}
+
+// --- Detail pane. ------------------------------------------------------------------------------
+function renderDetail() {
+  const body = $("detail-body");
+  const activity = selectedId ? activityById(selectedId) : null;
+  if (!activity) {
+    body.innerHTML = '<div class="empty"><p>Select an activity to see its risks and safeguards.</p></div>';
+    return;
+  }
+  const risks = risksForActivity(activity.id);
+  const ancestry = pathLabels(activity).join("  ›  ");
+  let html = '<div class="detail-title">' + esc(activity.label || "(untitled)") + "</div>";
+  html += '<div class="detail-path">' + (ancestry ? esc(ancestry) : "top-level activity") + "</div>";
+
+  if (!risks.length) {
+    html += '<div class="sg-none">No risks recorded for this activity yet.</div>';
+  } else {
+    html += risks.map((r) => riskCard(activity.id, r)).join("");
+  }
+  html += '<div style="margin-top:12px"><button class="btn ghost small" id="add-risk-btn">＋ Add risk</button></div>';
+  html += '<div class="picker hidden" id="risk-picker"></div>';
+  body.innerHTML = html;
+
+  // Wire risk cards.
+  risks.forEach((r) => {
+    const key = activity.id + "::" + r.id;
+    $("risk-head-" + r.id).onclick = () => {
+      if (openRisks.has(key)) openRisks.delete(key); else openRisks.add(key);
+      renderDetail();
+    };
+    $("detach-risk-" + r.id).onclick = (e) => {
+      e.stopPropagation();
+      api("/api/activity/risk/detach", { activity_id: activity.id, risk_id: r.id });
+    };
+    if (openRisks.has(key)) {
+      $("assign-sg-btn-" + r.id).onclick = () => toggleSafeguardPicker(activity.id, r.id);
+      safeguardsForRisk(activity.id, r.id).forEach((s) => {
+        $("remove-mit-" + r.id + "-" + s.id).onclick = () =>
+          api("/api/mitigation/remove", { activity_id: activity.id, risk_id: r.id, safeguard_id: s.id });
+      });
+    }
+  });
+  $("add-risk-btn").onclick = () => toggleRiskPicker(activity.id);
+}
+
+function pathLabels(activity) {
+  const labels = [];
+  let cur = activity;
+  while (cur && cur.parent_id) { cur = activityById(cur.parent_id); if (cur) labels.unshift(cur.label); }
+  return labels;
+}
+
+function riskCard(activityId, risk) {
+  const key = activityId + "::" + risk.id;
+  const open = openRisks.has(key);
+  const sgs = safeguardsForRisk(activityId, risk.id);
+  const body = open
+    ? '<div class="risk-body">' +
+        (sgs.length
+          ? sgs.map((s) => sgRow(risk.id, s)).join("")
+          : '<div class="sg-none">No safeguards assigned.</div>') +
+        '<div style="margin-top:8px"><button class="btn ghost small" id="assign-sg-btn-' + risk.id + '">＋ Assign safeguard</button></div>' +
+        '<div class="picker hidden" id="sg-picker-' + risk.id + '"></div>' +
+      "</div>"
+    : "";
+  return (
+    '<div class="risk-card' + (open ? " open" : "") + '">' +
+      '<div class="risk-head" id="risk-head-' + risk.id + '">' +
+        '<button class="caret">▾</button>' +
+        '<span class="risk-name">' + esc(risk.label) + "</span>" +
+        '<span class="reuse">used in ' + risk.used_by + " activit" + (risk.used_by === 1 ? "y" : "ies") + "</span>" +
+        '<button class="icon-btn danger" id="detach-risk-' + risk.id + '" title="Detach risk">✕</button>' +
+      "</div>" + body +
+    "</div>"
+  );
+}
+
+function sgRow(riskId, sg) {
+  return (
+    '<div class="sg-row">' +
+      '<span class="sg-name">' + esc(sg.label) + "</span>" +
+      '<span class="pill ' + sg.kind + '">' + kindLabel(sg.kind) + "</span>" +
+      '<span class="pill ' + sg.measures + '">' + sg.measures + "</span>" +
+      '<span class="usedby' + (sg.used_by > 1 ? " shared" : "") + '">reused ×' + sg.used_by + "</span>" +
+      '<span class="spacer-x"></span>' +
+      '<button class="icon-btn danger" id="remove-mit-' + riskId + "-" + sg.id + '" title="Unassign">✕</button>' +
+    "</div>"
+  );
+}
+
+// --- Add-risk picker: pick an existing library risk, or create a new one. ----------------------
+function toggleRiskPicker(activityId) {
+  const el = $("risk-picker");
+  if (!el.classList.contains("hidden")) { el.classList.add("hidden"); return; }
+  const attached = new Set(risksForActivity(activityId).map((r) => r.id));
+  const available = MODEL.risks.filter((r) => !attached.has(r.id));
+  const options = available.map((r) => '<option value="' + r.id + '">' + esc(r.label) +
+    " (used ×" + r.used_by + ")</option>").join("");
+  el.innerHTML =
+    '<div class="picker-tabs">' +
+      '<button class="active" data-mode="existing"' + (available.length ? "" : " disabled") + ">Existing</button>" +
+      '<button data-mode="new">New risk</button>' +
+    "</div>" +
+    '<div data-pane="existing"' + (available.length ? "" : ' style="display:none"') + '>' +
+      '<div class="row"><select id="risk-existing">' + options + "</select>" +
+      '<button class="btn primary small" id="risk-attach">Attach</button></div></div>' +
+    '<div data-pane="new"' + (available.length ? ' style="display:none"' : "") + '>' +
+      '<div class="row"><input type="text" id="risk-new-label" placeholder="Risk name, e.g. Data loss"></div>' +
+      '<div class="row"><input type="text" id="risk-new-desc" placeholder="Description (optional)">' +
+      '<button class="btn primary small" id="risk-create">Create &amp; attach</button></div></div>';
+  el.classList.remove("hidden");
+  pickerTabs(el);
+  const attach = $("risk-attach");
+  if (attach) attach.onclick = () => {
+    const rid = $("risk-existing").value;
+    if (rid) api("/api/activity/risk/attach", { activity_id: activityId, risk_id: rid });
+  };
+  $("risk-create").onclick = async () => {
+    const label = $("risk-new-label").value.trim();
+    if (!label) { toast("Give the risk a name."); return; }
+    const created = await api("/api/risk/create", { label, description: $("risk-new-desc").value.trim() });
+    if (created && created.created_id)
+      await api("/api/activity/risk/attach", { activity_id: activityId, risk_id: created.created_id });
+  };
+}
+
+// --- Assign-safeguard picker: pick an existing safeguard, or create a new one. ------------------
+function toggleSafeguardPicker(activityId, riskId) {
+  const el = $("sg-picker-" + riskId);
+  if (!el.classList.contains("hidden")) { el.classList.add("hidden"); return; }
+  const assigned = new Set(safeguardsForRisk(activityId, riskId).map((s) => s.id));
+  const available = MODEL.safeguards.filter((s) => !assigned.has(s.id));
+  const options = available.map((s) => '<option value="' + s.id + '">' + esc(s.label) +
+    " · " + kindLabel(s.kind) + " · " + s.measures + " (reused ×" + s.used_by + ")</option>").join("");
+  el.innerHTML =
+    '<div class="picker-tabs">' +
+      '<button class="active" data-mode="existing"' + (available.length ? "" : " disabled") + ">Existing</button>" +
+      '<button data-mode="new">New safeguard</button>' +
+    "</div>" +
+    '<div data-pane="existing"' + (available.length ? "" : ' style="display:none"') + '>' +
+      '<div class="row"><select id="sg-existing-' + riskId + '">' + options + "</select>" +
+      '<button class="btn primary small" id="sg-assign-' + riskId + '">Assign</button></div></div>' +
+    '<div data-pane="new"' + (available.length ? ' style="display:none"' : "") + '>' +
+      '<div class="row"><input type="text" id="sg-new-label-' + riskId + '" placeholder="Safeguard name"></div>' +
+      '<div class="row"><label>Kind</label><select id="sg-new-kind-' + riskId + '">' +
+        '<option value="structural">structural</option>' +
+        '<option value="human_dependent">human-dependent</option></select>' +
+        '<label>Measures</label><select id="sg-new-measures-' + riskId + '">' +
+        '<option value="health">health</option><option value="efficacy">efficacy</option></select>' +
+      "</div>" +
+      '<div class="row"><button class="btn primary small" id="sg-create-' + riskId + '">Create &amp; assign</button></div></div>';
+  el.classList.remove("hidden");
+  pickerTabs(el);
+  const assign = $("sg-assign-" + riskId);
+  if (assign) assign.onclick = () => {
+    const sid = $("sg-existing-" + riskId).value;
+    if (sid) api("/api/mitigation/add", { activity_id: activityId, risk_id: riskId, safeguard_id: sid });
+  };
+  $("sg-create-" + riskId).onclick = async () => {
+    const label = $("sg-new-label-" + riskId).value.trim();
+    if (!label) { toast("Give the safeguard a name."); return; }
+    const created = await api("/api/safeguard/create", {
+      label,
+      kind: $("sg-new-kind-" + riskId).value,
+      measures: $("sg-new-measures-" + riskId).value,
+    });
+    if (created && created.created_id)
+      await api("/api/mitigation/add", { activity_id: activityId, risk_id: riskId, safeguard_id: created.created_id });
+  };
+}
+
+// Local existing/new tab switch inside a picker (no re-render, so typing state survives).
+function pickerTabs(el) {
+  const tabs = el.querySelectorAll(".picker-tabs button");
+  tabs.forEach((btn) => {
+    btn.onclick = () => {
+      if (btn.disabled) return;
+      tabs.forEach((b) => b.classList.toggle("active", b === btn));
+      el.querySelectorAll("[data-pane]").forEach((p) => {
+        p.style.display = p.getAttribute("data-pane") === btn.dataset.mode ? "" : "none";
+      });
+    };
+  });
+}
+
+// --- Library section. --------------------------------------------------------------------------
+function renderLibraries() {
+  const rl = $("risk-lib");
+  rl.innerHTML = MODEL.risks.length
+    ? MODEL.risks.map((r) =>
+        '<div class="lib-item"><div style="flex:1;min-width:0">' +
+          '<div class="lib-name">' + esc(r.label) + "</div>" +
+          (r.description ? '<div class="lib-desc">' + esc(r.description) + "</div>" : "") +
+        "</div>" +
+        '<span class="usedby' + (r.used_by > 1 ? " shared" : "") + '">used ×' + r.used_by + "</span></div>"
+      ).join("")
+    : '<div class="lib-empty">No risks yet — add one from an activity.</div>';
+
+  const sl = $("safeguard-lib");
+  sl.innerHTML = MODEL.safeguards.length
+    ? MODEL.safeguards.map((s) =>
+        '<div class="lib-item"><div style="flex:1;min-width:0">' +
+          '<div class="lib-name">' + esc(s.label) + "</div>" +
+          '<div class="lib-tags" style="margin-top:4px">' +
+            '<span class="pill ' + s.kind + '">' + kindLabel(s.kind) + "</span>" +
+            '<span class="pill ' + s.measures + '">' + s.measures + "</span>" +
+          "</div></div>" +
+        '<span class="usedby' + (s.used_by > 1 ? " shared" : "") + '">reused ×' + s.used_by + "</span></div>"
+      ).join("")
+    : '<div class="lib-empty">No safeguards yet — assign one to a risk.</div>';
+}
+
+// --- Top-level render + boot. ------------------------------------------------------------------
+function render() { renderTree(); renderDetail(); renderLibraries(); }
+
 (function init() {
-  const f = INITIAL.features;
-  const impact = f.signals.find(s => s.safeguard_id === "impact");
-  document.getElementById("impact").value = impact ? impact.value : 1;
-  document.getElementById("budget").value = Math.round(f.remaining_budget * 100);
-  syncLabels();
-  renderPipeline();
-  renderScore(INITIAL);
-  seedLog(INITIAL.recent);
-  ["impact", "budget"].forEach(id =>
-    document.getElementById(id).addEventListener("input", onInput));
-  document.getElementById("override").addEventListener("change", rescore);
-  document.getElementById("ingest-kind").addEventListener("change", ingestScale);
-  document.getElementById("ingest-value").addEventListener("input", syncIngestLabel);
-  document.getElementById("ingest-btn").addEventListener("click", ingest);
-  ingestScale();
+  // Theme toggle: stamp data-theme so it wins over the prefers-color-scheme default in both directions.
+  const toggle = $("theme-toggle");
+  toggle.onclick = () => {
+    const cur = document.documentElement.getAttribute("data-theme");
+    const next = cur === "dark" ? "light" : cur === "light" ? "dark"
+      : (window.matchMedia("(prefers-color-scheme: dark)").matches ? "light" : "dark");
+    document.documentElement.setAttribute("data-theme", next);
+  };
+  $("add-root").onclick = () => addActivity(null);
+  // Open onto the first top-level activity so the detail pane is populated on first paint.
+  const first = topLevel()[0];
+  if (first) selectedId = first.id;
+  render();
 })();
 </script>
 </body>
@@ -463,32 +619,6 @@ async function ingest() {
 """
 
 
-def render_page(
-    *,
-    initial_score: dict[str, Any],
-    pipeline: list[dict[str, Any]],
-    pipeline_source: str,
-    safeguards: list[dict[str, Any]],
-    flakiness_max: float,
-    impact_max: float,
-    override_remaining: float,
-) -> str:
-    """Fill the template with server-computed state and return the full HTML document."""
-    subs = {
-        "__INITIAL_JSON__": json.dumps(initial_score),
-        "__PIPELINE_JSON__": json.dumps(pipeline),
-        "__PIPELINE_SOURCE__": escape(pipeline_source),
-        "__SAFEGUARDS_JSON__": json.dumps(safeguards),
-        "__FLAKINESS_MAX__": json.dumps(flakiness_max),
-        "__IMPACT_MAX__": _trim(impact_max),
-        "__OVERRIDE_PCT__": _trim(override_remaining * 100),
-    }
-    html = _TEMPLATE
-    for token, value in subs.items():
-        html = html.replace(token, value)
-    return html
-
-
-def _trim(value: float) -> str:
-    """Render a float without a trailing ``.0`` for clean HTML attributes."""
-    return str(int(value)) if value == int(value) else str(value)
+def render_page(model: dict[str, Any]) -> str:
+    """Fill the template with the embedded view model and return the full HTML document."""
+    return _TEMPLATE.replace("__MODEL_JSON__", json.dumps(model))

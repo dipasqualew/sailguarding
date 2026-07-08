@@ -27,12 +27,12 @@ def _safeguard(sid: str) -> Safeguard:
 
 
 def _binding(
-    sid: str, *, context: dict[str, str], action: str = "*", priority: int = 0
+    sid: str, *, context: dict[str, str], activity: str = "*", priority: int = 0
 ) -> SafeguardBinding:
     return SafeguardBinding(
         safeguard=_safeguard(sid),
         selector=Selector(context=context),
-        action=action,
+        activity=activity,
         priority=priority,
     )
 
@@ -61,8 +61,8 @@ def test_non_matching_context_governs_nothing() -> None:
 def test_action_scoped_binding_only_governs_its_action() -> None:
     registry = InMemoryBindingRegistry(
         [
-            _binding("impact", context={"repo": "checkout"}, action="write-tests"),
-            _binding("no-flaky-tests", context={"repo": "checkout"}),  # every action
+            _binding("impact", context={"repo": "checkout"}, activity="write-tests"),
+            _binding("no-flaky-tests", context={"repo": "checkout"}),  # every activity
         ]
     )
     tests = {b.safeguard.id for b in registry.resolve("write-tests", CHECKOUT)}

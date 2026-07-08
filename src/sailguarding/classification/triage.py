@@ -1,8 +1,8 @@
 """The triage queue — where unresolved events go to be modelled bottom-up.
 
 Events matching no selector, or matching ambiguously, are **not silently dropped**: they land
-here so a human can inspect them and author a new action + selector. That is the bottom-up
-modelling loop the SPEC calls for — the system learns new actions from the events it could not
+here so a human can inspect them and author a new activity + selector. That is the bottom-up
+modelling loop the SPEC calls for — the system learns new activities from the events it could not
 yet name, instead of pretending it saw nothing.
 
 This is an in-memory collector, mirroring :class:`InMemoryStorage`: no git, no filesystem, no
@@ -23,9 +23,9 @@ from sailguarding.domain import EventRecord
 class TriageEntry:
     """One event that could not be resolved, with why.
 
-    :param event: The unresolved event, verbatim (its ``action_id`` is still ``None``).
+    :param event: The unresolved event, verbatim (its ``activity_id`` is still ``None``).
     :param reason: ``UNMATCHED`` (no selector matched) or ``AMBIGUOUS`` (selectors disagreed).
-    :param candidates: The tied action ids when ``reason`` is ``AMBIGUOUS``; empty otherwise.
+    :param candidates: The tied activity ids when ``reason`` is ``AMBIGUOUS``; empty otherwise.
     """
 
     event: EventRecord

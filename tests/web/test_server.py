@@ -9,12 +9,15 @@ from http.client import HTTPConnection
 
 import pytest
 
+from sailguarding.model import InMemoryActivityModelStore
+from sailguarding.web.app import App
 from sailguarding.web.server import make_server
 
 
 @pytest.fixture
 def base_url() -> Iterator[str]:
-    server = make_server("127.0.0.1", 0)  # port 0 → an ephemeral free port
+    # Inject an in-memory-backed app so the smoke test never writes a model file into the repo.
+    server = make_server("127.0.0.1", 0, App(InMemoryActivityModelStore()))  # port 0 → free port
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -36,15 +39,40 @@ def _get(base_url: str, path: str) -> tuple[int, str, bytes]:
         conn.close()
 
 
+def _post(base_url: str, path: str, body: dict[str, object]) -> tuple[int, bytes]:
+    conn = HTTPConnection(base_url, timeout=5)
+    try:
+        payload = json.dumps(body).encode("utf-8")
+        conn.request("POST", path, body=payload, headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    finally:
+        conn.close()
+
+
 def test_serves_the_dashboard(base_url: str) -> None:
     status, content_type, body = _get(base_url, "/")
     assert status == 200
     assert content_type.startswith("text/html")
-    assert b"delegation scoring" in body
+    assert b"activity model" in body
 
 
-def test_serves_the_score_api(base_url: str) -> None:
-    status, content_type, body = _get(base_url, "/api/score?impact=100&flakiness=0&budget=1")
+def test_serves_the_model_api(base_url: str) -> None:
+    status, content_type, body = _get(base_url, "/api/model")
     assert status == 200
     assert content_type.startswith("application/json")
-    assert json.loads(body)["score"] == 0.0
+    view = json.loads(body)
+    assert {"activities", "risks", "safeguards"} <= set(view)
+
+
+def test_serves_a_post_mutation(base_url: str) -> None:
+    status, body = _post(base_url, "/api/activity/add", {"parent_id": None, "label": "Smoke test"})
+    assert status == 200
+    data = json.loads(body)
+    assert isinstance(data["created_id"], str)
+    assert any(a["label"] == "Smoke test" for a in data["model"]["activities"])
+
+
+def test_app_boots_from_a_fresh_in_memory_store() -> None:
+    # The default App seeds and serves without touching any durable store.
+    assert App().handle("GET", "/api/model").status == 200

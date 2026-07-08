@@ -21,7 +21,7 @@ def _decision() -> Decision:
             signals=(SafeguardSignal("no-flaky-tests", "flakiness", 0.004),),
             context=Context(repo="checkout"),
             remaining_budget=0.9,
-            action_id="write-tests",
+            activity_id="write-tests",
         ),
         function_name="min-composition",
         function_version="1",

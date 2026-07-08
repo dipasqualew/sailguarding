@@ -25,7 +25,7 @@ def _rich_vector() -> FeatureVector:
         ),
         context=Context(repo="checkout", team="core", is_production=True),
         remaining_budget=0.42,
-        action_id="write-tests",
+        activity_id="write-tests",
     )
 
 
@@ -43,14 +43,14 @@ def test_json_is_canonical_and_byte_stable() -> None:
     vector = _rich_vector()
     # Same record, same bytes — a git-diffable, append-only log line.
     assert vector.to_json() == vector.to_json()
-    assert '"schema_version":1' in vector.to_json()
+    assert '"schema_version":2' in vector.to_json()
 
 
 def test_defaults_are_a_full_budget_empty_vector() -> None:
     empty = FeatureVector()
     assert empty.signals == ()
     assert empty.remaining_budget == 1.0
-    assert empty.action_id is None
+    assert empty.activity_id is None
     assert empty.schema_version == FEATURE_SCHEMA_VERSION
     assert FeatureVector.from_json(empty.to_json()) == empty
 

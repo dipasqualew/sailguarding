@@ -1,69 +1,62 @@
-"""The framework-free request router behind the dashboard.
+"""The framework-free request router behind the activity-model editor.
 
-Kept as a pure ``(method, path, query) -> Response`` function so the whole surface is testable
-without opening a socket: a test constructs an :class:`App` and calls :meth:`App.handle` directly.
-The :mod:`.server` module is the only place that touches ``http.server``; everything of substance
-lives here and in :mod:`.scenario`.
+Kept as a pure ``(method, path, query, body) -> Response`` function so the whole surface is testable
+without opening a socket: a test constructs an :class:`App` with an injected
+:class:`~sailguarding.model.InMemoryActivityModelStore` and calls :meth:`App.handle` directly. The
+:mod:`.server` module is the only place that touches ``http.server``.
 
-Every score the API computes runs through a real :class:`Scorer` into a shared
-:class:`InMemoryDecisionLog`, so the decision-log panel is the genuine audit trail accumulating as
-you move the sliders — not a cosmetic list.
+Every mutation runs through one of the :class:`~sailguarding.model.ActivityModel`'s pure,
+value-returning transforms — apply it, hold the new model, persist it to the injected store, and
+return the refreshed view model — so the editor is a genuine front-end over the real aggregate, not
+a re-implementation of it. Bad input never 500s: a malformed body or a transform's :class:`KeyError`
+degrades to a 400 with an ``{"error": ...}`` payload.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
-from urllib.parse import parse_qs
+from typing import Any
 
-from sailguarding.domain import EventRecord
-from sailguarding.measurement import InMemoryMetricsSink
-from sailguarding.scoring import InMemoryDecisionLog, Scorer
+from sailguarding.model import (
+    ActivityModel,
+    ActivityModelStore,
+    FileActivityModelStore,
+    InMemoryActivityModelStore,
+)
+from sailguarding.model.model import ROOT_ID
+from sailguarding.safeguards import Measurement, SafeguardKind
 from sailguarding.web import scenario
 from sailguarding.web.page import render_page
 
-# The source of the pipeline panel's events. Injected into :class:`App` so tests drive it with a
-# fixed list and never touch git; the running server wires in :func:`store_backed_events`.
-EventSource = Callable[[], list[EventRecord]]
 
+def store_backed_model_store() -> ActivityModelStore | None:
+    """A durable :class:`FileActivityModelStore` under the configured store root, or ``None``.
 
-def store_backed_events() -> list[EventRecord]:
-    """Every event the sensor recorded, read from the store the operator config selects.
-
-    This is the honest wire between the sensor and the dashboard: the same
-    :class:`~sailguarding.sensor.config.SensorConfig` the hook resolves picks the store (the
-    ``sailguarding/events`` branch by default), and we scan it. Kept fail-soft — a missing branch,
-    a non-git directory, any storage error yields no events (the panel then shows the demo
-    scenario) rather than breaking the page.
+    Mirrors the sensor's own store resolution: the same
+    :class:`~sailguarding.sensor.config.SensorConfig` the hook resolves picks the root (under the
+    git dir by default), and the model lives in ``model.json`` there. Kept fail-soft — a non-git
+    directory, a permissions error, any storage failure yields ``None`` so the caller falls back to
+    an in-memory store rather than breaking the server.
     """
-    from dataclasses import replace
-
-    from sailguarding.sensor.cli import ENV_PROJECT_DIR
-    from sailguarding.sensor.config import (
-        SensorConfig,
-        build_commit_storage,
-        resolve_store_root,
-    )
-    from sailguarding.sensor.pluginconfig import load_from_env
-    from sailguarding.storage.git import SubprocessGitRunner
-
     try:
+        from sailguarding.sensor.cli import ENV_PROJECT_DIR
+        from sailguarding.sensor.config import SensorConfig, resolve_store_root
+        from sailguarding.sensor.pluginconfig import load_from_env
+        from sailguarding.storage.git import SubprocessGitRunner
+
         env = os.environ
         repo = Path(env.get(ENV_PROJECT_DIR) or Path.cwd())
         git = SubprocessGitRunner(repo)
         config = SensorConfig.resolve(repo, env, load_from_env(env))
-        config = replace(config, store_path=resolve_store_root(git, repo, config.store_path))
-        return build_commit_storage(config).scan()
+        root = resolve_store_root(git, repo, config.store_path)
+        root.mkdir(parents=True, exist_ok=True)
+        return FileActivityModelStore(root / "model.json")
     except Exception:
-        return []
-
-
-# Input ranges the sliders move within; also used to clamp hand-crafted API calls.
-FLAKINESS_MAX = 0.05  # 5%
-IMPACT_MAX = 100.0  # services affected
+        return None
 
 
 @dataclass(frozen=True)
@@ -76,177 +69,205 @@ class Response:
 
 
 class App:
-    """Holds the demo's decision log and routes requests against it.
+    """Holds the current :class:`ActivityModel` and routes requests that read or mutate it.
 
-    The scoring function is rebuilt per score from the registry-resolved, still-enabled safeguards
-    (task 06), so toggling a binding actually changes which ceilings reach the scorer — but every
-    score runs through a :class:`Scorer` into the one shared log, so the audit trail is continuous.
+    On construction the model is loaded from the injected store; an empty store is seeded with
+    :func:`scenario.seed_model` and saved, so a fresh instance always opens onto the starter model.
+    Every mutation applies a pure transform, swaps in the new model, and persists it, so a second
+    :class:`App` built on the same store sees the change.
+
+    :param store: Where the model is loaded from and saved to. Defaults to a fresh
+        :class:`InMemoryActivityModelStore` — the injectable, no-I/O unit-test default.
     """
 
-    def __init__(self, events_source: EventSource | None = None) -> None:
-        self._log = InMemoryDecisionLog()
-        # The metrics sink (task 08) — separate from the decision log — accumulates the safeguard's
-        # evidence across the session, so ingesting a point moves the derived signal over time.
-        self._metrics = scenario.seed_metrics()
-        # Where the pipeline panel's events come from. Defaults to *none* so a bare ``App()`` is a
-        # hermetic demo (the seed scenario, no I/O); the server injects :func:`store_backed_events`
-        # to show the tool calls this repo actually recorded.
-        self._events_source: EventSource = events_source or (lambda: [])
+    def __init__(self, store: ActivityModelStore | None = None) -> None:
+        self._store: ActivityModelStore = store or InMemoryActivityModelStore()
+        model = self._store.load()
+        if model is None:
+            model = scenario.seed_model()
+            self._store.save(model)
+        self._model = model
 
     @property
-    def log(self) -> InMemoryDecisionLog:
-        return self._log
+    def model(self) -> ActivityModel:
+        return self._model
 
-    @property
-    def metrics(self) -> InMemoryMetricsSink:
-        return self._metrics
+    def view_model(self) -> dict[str, Any]:
+        """The JSON the UI renders — the model flattened for the wire (see :func:`view_model`)."""
+        return view_model(self._model)
 
-    def handle(self, method: str, path: str, query: str = "") -> Response:
-        """Route one request. Only ``GET`` is served; everything else is a 405."""
-        if method != "GET":
-            return _json({"error": f"method {method} not allowed"}, status=405)
+    def handle(self, method: str, path: str, query: str = "", body: bytes = b"") -> Response:
+        """Route one request. ``GET`` reads; ``POST`` mutates; everything else is a 405."""
+        if method == "GET":
+            return self._get(path)
+        if method == "POST":
+            return self._post(path, body)
+        return _json({"error": f"method {method} not allowed"}, status=405)
 
-        params = parse_qs(query)
+    def _get(self, path: str) -> Response:
         if path == "/":
-            return self._index(params)
-        if path == "/api/score":
-            return _json(self._score(params))
-        if path == "/api/ingest":
-            return _json(self._ingest(params))
-        if path == "/api/pipeline":
-            return _json(self._pipeline())
-        if path == "/api/decisions":
-            return _json({"decisions": self._recent_decisions()})
+            html = render_page(self.view_model())
+            return Response(200, "text/html; charset=utf-8", html.encode("utf-8"))
+        if path == "/api/model":
+            return _json(self.view_model())
         return _json({"error": f"not found: {path}"}, status=404)
 
-    def _index(self, params: dict[str, list[str]] | None = None) -> Response:
-        # Compute the initial score server-side and embed it, so the first paint is populated even
-        # before the page's JS runs (and screenshots / deep links capture a full dashboard).
-        params = params or {}
-        initial = self._score(params)
-        initial["recent"] = self._recent_decisions()  # seed the log panel with real history
-        events = self._read_events()
-        html = render_page(
-            initial_score=initial,
-            pipeline=scenario.classified_pipeline(events or None),
-            pipeline_source=_pipeline_source(live=bool(events), count=len(events)),
-            safeguards=scenario.safeguard_panel(_disabled(params)),
-            flakiness_max=FLAKINESS_MAX,
-            impact_max=IMPACT_MAX,
-            override_remaining=scenario.LEAF_OVERRIDE_REMAINING,
-        )
-        return Response(200, "text/html; charset=utf-8", html.encode("utf-8"))
-
-    def _pipeline(self) -> dict[str, object]:
-        # Read the sensor's recorded events and classify them through the real selector engine.
-        # With nothing recorded yet we fall back to the seed scenario so the panel is never blank.
-        events = self._read_events()
-        rows = scenario.classified_pipeline(events or None)
-        return {"events": rows, "live": bool(events), "count": len(events)}
-
-    def _read_events(self) -> list[EventRecord]:
+    def _post(self, path: str, body: bytes) -> Response:
         try:
-            return list(self._events_source())
-        except Exception:
-            return []
+            payload = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return _json({"error": "request body must be valid JSON"}, status=400)
+        if not isinstance(payload, dict):
+            return _json({"error": "request body must be a JSON object"}, status=400)
 
-    def _ingest(self, params: dict[str, list[str]]) -> dict[str, object]:
-        # Append one measurement to the live sink, then re-score: the derived signal (and, for a
-        # health point, its ceiling on the float) moves because the evidence history changed.
-        kind = "efficacy" if _param_str(params, "kind") == "efficacy" else "health"
-        value = _clamp(_param(params, "value", scenario.current_flakiness(self._metrics)), 0.0, 1.0)
-        scenario.ingest_measurement(self._metrics, kind=kind, value=value)
-        return self._score(params)
+        try:
+            outcome = self._apply(path, payload)
+        except KeyError as exc:
+            return _json({"error": exc.args[0] if exc.args else str(exc)}, status=400)
+        except (ValueError, TypeError) as exc:
+            return _json({"error": str(exc)}, status=400)
 
-    def _score(self, params: dict[str, list[str]]) -> dict[str, object]:
-        # The no-flaky-tests signal is derived from ingested evidence (task 08), not a slider.
-        flakiness = scenario.current_flakiness(self._metrics)
-        services = _clamp(_param(params, "impact", 1.0), 0.0, IMPACT_MAX)
-        parent_budget = _clamp(_param(params, "budget", 1.0), 0.0, 1.0)
-        override = _flag(params, "override")
-        disabled = _disabled(params)
+        if outcome is None:
+            return _json({"error": f"not found: {path}"}, status=404)
 
-        # The tree resolves the leaf's remaining budget: the parent budget inherited down to
-        # write-tests, unless the leaf override wins. That resolved value is what the scorer reads.
-        remaining = scenario.resolved_budget(parent_remaining=parent_budget, override=override)
-        features = scenario.assemble_features(
-            flakiness=flakiness, services_affected=services, remaining_budget=remaining
-        )
-        scorer = Scorer(scenario.scoring_function(disabled), self._log)
-        decision = scorer.score(features)
-        breakdown = scenario.ceiling_breakdown(features, disabled)
-        binding = next(row for row in breakdown if row["binding"])
+        model, created_id = outcome
+        self._model = model
+        self._store.save(model)
+        return _json({"model": self.view_model(), "created_id": created_id})
 
-        return {
-            "score": decision.score,
-            "function": {"name": decision.function_name, "version": decision.function_version},
-            "binding": binding["label"],
-            "ceilings": breakdown,
-            "safeguards": scenario.safeguard_panel(disabled),
-            "evidence": scenario.evidence_panel(self._metrics),
-            "tree": scenario.tree_panel(parent_remaining=parent_budget, override=override),
-            "resolved_budget": remaining,
-            "features": features.to_dict(),
-            "timestamp": decision.timestamp.isoformat().replace("+00:00", "Z"),
-            "decisions_logged": len(self._log),
+    def _apply(self, path: str, payload: dict[str, Any]) -> tuple[ActivityModel, str | None] | None:
+        """Apply the mutation named by ``path``. ``None`` means the path is unknown (a 404).
+
+        Returns ``(new_model, created_id)``; ``created_id`` is the fresh id for creating routes and
+        ``None`` for edge/rename/delete routes. Missing or wrong-typed fields raise
+        :class:`ValueError`; missing references raise :class:`KeyError` — both become 400s upstream.
+        """
+        model = self._model
+        if path == "/api/activity/add":
+            return model.add_activity(_opt_str(payload, "parent_id"), _str(payload, "label"))
+        if path == "/api/activity/rename":
+            return model.rename_activity(_str(payload, "id"), _str(payload, "label")), None
+        if path == "/api/activity/delete":
+            return model.remove_activity(_str(payload, "id")), None
+        if path == "/api/risk/create":
+            return model.add_risk(_str(payload, "label"), _opt_str(payload, "description") or "")
+        if path == "/api/activity/risk/attach":
+            return model.attach_risk(_str(payload, "activity_id"), _str(payload, "risk_id")), None
+        if path == "/api/activity/risk/detach":
+            return model.detach_risk(_str(payload, "activity_id"), _str(payload, "risk_id")), None
+        if path == "/api/safeguard/create":
+            return model.add_safeguard(
+                _str(payload, "label"),
+                SafeguardKind(_str(payload, "kind")),
+                Measurement(_str(payload, "measures")),
+                _opt_str(payload, "metric") or "",
+                _cadence(payload),
+            )
+        if path == "/api/mitigation/add":
+            return (
+                model.add_mitigation(
+                    _str(payload, "activity_id"),
+                    _str(payload, "risk_id"),
+                    _str(payload, "safeguard_id"),
+                ),
+                None,
+            )
+        if path == "/api/mitigation/remove":
+            return (
+                model.remove_mitigation(
+                    _str(payload, "activity_id"),
+                    _str(payload, "risk_id"),
+                    _str(payload, "safeguard_id"),
+                ),
+                None,
+            )
+        return None
+
+
+def view_model(model: ActivityModel) -> dict[str, Any]:
+    """Flatten an :class:`ActivityModel` into the JSON shape the editor renders.
+
+    Activities come back depth-first with the synthetic root excluded, each carrying its depth,
+    child ids, and the counts (risks faced, mitigation edges) the birds-eye tree reads. Risks and
+    safeguards carry their reuse count (``used_by`` = distinct activities referencing them). The
+    edge lists (``activity_risks``, ``mitigations``) are handed over flat and sorted; the JS joins
+    them against the libraries to build per-activity detail.
+    """
+    activities: list[dict[str, Any]] = []
+    for top in model.top_level():
+        _flatten(model, top, 0, activities)
+
+    risks = [
+        {
+            "id": risk.id,
+            "label": risk.label,
+            "description": risk.description,
+            "used_by": len(model.activities_using_risk(risk.id)),
         }
-
-    def _recent_decisions(self, limit: int = 12) -> list[dict[str, object]]:
-        decisions = self._log.scan()[-limit:]
-        decisions.reverse()  # newest first
-        return [
-            {
-                "score": d.score,
-                "function_version": d.function_version,
-                "timestamp": d.timestamp.isoformat().replace("+00:00", "Z"),
-                "remaining_budget": d.features.remaining_budget,
-                "action_id": d.features.action_id,
-            }
-            for d in decisions
-        ]
-
-
-def _disabled(params: dict[str, list[str]]) -> frozenset[str]:
-    """The set of safeguard ids toggled off, from a comma-separated ``disabled`` query param."""
-    values = params.get("disabled")
-    if not values:
-        return frozenset()
-    return frozenset(sid for sid in values[0].split(",") if sid)
-
-
-def _flag(params: dict[str, list[str]], name: str) -> bool:
-    """A boolean query flag: true for ``?name=1`` / ``true`` / ``on``, false otherwise."""
-    values = params.get(name)
-    if not values:
-        return False
-    return values[0].lower() in {"1", "true", "on", "yes"}
+        for risk in model.risks
+    ]
+    safeguards = [
+        {
+            "id": sg.id,
+            "label": sg.label,
+            "kind": sg.kind.value,
+            "measures": sg.measures.value,
+            "metric": sg.metric,
+            "cadence_seconds": (sg.cadence.total_seconds() if sg.cadence is not None else None),
+            "used_by": len(model.activities_using_safeguard(sg.id)),
+        }
+        for sg in model.safeguards
+    ]
+    return {
+        "activities": activities,
+        "risks": risks,
+        "safeguards": safeguards,
+        "activity_risks": sorted([a, r] for (a, r) in model.activity_risks),
+        "mitigations": sorted([a, r, s] for (a, r, s) in model.mitigations),
+    }
 
 
-def _param(params: dict[str, list[str]], name: str, default: float) -> float:
-    values = params.get(name)
-    if not values:
-        return default
-    try:
-        return float(values[0])
-    except ValueError:
-        return default
+def _flatten(model: ActivityModel, node: Any, depth: int, out: list[dict[str, Any]]) -> None:
+    parent = None if node.parent_id in (None, ROOT_ID) else node.parent_id
+    mitigation_count = sum(1 for edge in model.mitigations if edge[0] == node.id)
+    out.append(
+        {
+            "id": node.id,
+            "label": node.label,
+            "parent_id": parent,
+            "depth": depth,
+            "child_ids": [child.id for child in node.children],
+            "risk_count": len(model.risks_for(node.id)),
+            "mitigation_count": mitigation_count,
+        }
+    )
+    for child in node.children:
+        _flatten(model, child, depth + 1, out)
 
 
-def _param_str(params: dict[str, list[str]], name: str, default: str = "") -> str:
-    values = params.get(name)
-    return values[0] if values else default
+def _str(payload: dict[str, Any], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise ValueError(f"field {key!r} must be a string")
+    return value
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
+def _opt_str(payload: dict[str, Any], key: str) -> str | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"field {key!r} must be a string or null")
+    return value
 
 
-def _pipeline_source(*, live: bool, count: int) -> str:
-    """The panel's provenance line: how many real events, or that it is the demo fallback."""
-    if live:
-        calls = "call" if count == 1 else "calls"
-        return f"Showing {count} recorded tool {calls} from the sensor's event store."
-    return "No events recorded yet — showing the demo scenario. Run tools with the plugin enabled."
+def _cadence(payload: dict[str, Any]) -> timedelta | None:
+    value = payload.get("cadence_seconds")
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        raise ValueError("field 'cadence_seconds' must be a number or null")
+    return timedelta(seconds=float(value))
 
 
 def _json(payload: object, *, status: int = 200) -> Response:

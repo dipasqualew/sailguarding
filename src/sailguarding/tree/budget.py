@@ -8,8 +8,9 @@ so ``remaining`` is supplied directly here — later it is derived from a limit 
 has consumed.
 
 A budget binds to a region exactly as a safeguard does — through the shared :class:`Selector`
-predicate over context, plus an **action-class glob** — so an *action class · context selector* is
-the same predicate machinery tasks 04/06 already use (:class:`BudgetBinding`). What is new here is
+predicate over context, plus an **activity-class glob** — so an *activity class · context
+selector* is the same predicate machinery tasks 04/06 already use (:class:`BudgetBinding`). What
+is new here is
 **inheritance**: a budget declared on a parent applies to every descendant that does not declare its
 own, and that rule is pinned once in :func:`resolve_budget` rather than rediscovered per feature.
 
@@ -36,7 +37,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from sailguarding.classification import Selector
 
 if TYPE_CHECKING:
-    from sailguarding.tree.tree import ActionTree
+    from sailguarding.tree.tree import ActivityTree
 
 # Bumped whenever the serialised shape of an ErrorBudget changes, so a reader can tell which schema
 # produced a stored record.
@@ -102,50 +103,51 @@ class ErrorBudget:
 
 @dataclass(frozen=True)
 class BudgetBinding:
-    """An :class:`ErrorBudget` bound to the *action-class · context* region it governs.
+    """An :class:`ErrorBudget` bound to the *activity-class · context* region it governs.
 
     The same binding shape as :class:`~sailguarding.safeguards.SafeguardBinding`, reused verbatim so
     budgets and safeguards do not fork a second predicate language. Only the selector's **context**
-    half participates (a binding delimits a region of context, not an event); the **action** glob
-    scopes it to an action class.
+    half participates (a binding delimits a region of context, not an event); the **activity** glob
+    scopes it to an activity class.
 
     :param budget: The budget this region is governed by.
     :param selector: The context predicate; its context dimensions must match the resolved context.
-    :param action: An action-id glob (default ``"*"``, every action). Governs an action only when
-        this glob matches the action's id — ``"write-tests"`` or ``"write-*"`` scopes it narrower.
+    :param activity: An activity-id glob (default ``"*"``, every activity). Governs an activity
+        only when this glob matches the activity's id — ``"write-tests"`` or ``"write-*"`` scopes
+        it narrower.
     :param priority: Breaks ties between equally specific bindings *at the same node* (higher wins),
         mirroring :class:`~sailguarding.classification.SelectorRule.priority`.
     """
 
     budget: ErrorBudget
     selector: Selector = field(default_factory=Selector)
-    action: str = "*"
+    activity: str = "*"
     priority: int = 0
 
-    def matches(self, action_id: str, context: Mapping[str, Any]) -> bool:
-        """True when this binding governs ``action_id`` running in ``context``.
+    def matches(self, activity_id: str, context: Mapping[str, Any]) -> bool:
+        """True when this binding governs ``activity_id`` running in ``context``.
 
-        Both axes must hold: the ``action`` glob matches ``action_id`` and the selector's context
-        predicate matches ``context``.
+        Both axes must hold: the ``activity`` glob matches ``activity_id`` and the selector's
+        context predicate matches ``context``.
         """
-        return fnmatchcase(action_id, self.action) and self.selector.matches_context(context)
+        return fnmatchcase(activity_id, self.activity) and self.selector.matches_context(context)
 
     @property
     def specificity(self) -> int:
         """How many axes this binding narrows on — the tie-breaker between bindings at one node.
 
         The selector's context :attr:`~sailguarding.classification.Selector.specificity` plus one if
-        the ``action`` glob is not the bare ``"*"`` wildcard. Mirrors
+        the ``activity`` glob is not the bare ``"*"`` wildcard. Mirrors
         :attr:`~sailguarding.safeguards.SafeguardBinding.specificity`.
         """
-        return self.selector.specificity + (0 if self.action == "*" else 1)
+        return self.selector.specificity + (0 if self.activity == "*" else 1)
 
     def to_dict(self) -> dict[str, Any]:
         """A JSON-serialisable form; the selector serialises through its own ``to_dict``."""
         return {
             "budget": self.budget.to_dict(),
             "selector": self.selector.to_dict(),
-            "action": self.action,
+            "activity": self.activity,
             "priority": self.priority,
         }
 
@@ -155,7 +157,7 @@ class BudgetBinding:
         return cls(
             budget=ErrorBudget.from_dict(data["budget"]),
             selector=Selector.from_dict(data.get("selector", {})),
-            action=data.get("action", "*"),
+            activity=data.get("activity", "*"),
             priority=data.get("priority", 0),
         )
 
@@ -171,15 +173,15 @@ class BudgetBinding:
 
 @runtime_checkable
 class BudgetRegistry(Protocol):
-    """Resolve the single budget binding declared *at* one ``(action, context)``, if any.
+    """Resolve the single budget binding declared *at* one ``(activity, context)``, if any.
 
     Deliberately node-local: it answers "does *this* node declare a budget?", not "what does this
     node inherit?". Inheritance across the tree is :func:`resolve_budget`'s job, kept separate so
     the rule lives in exactly one place. A stub returning a fixed binding is a valid registry.
     """
 
-    def resolve_local(self, action_id: str, context: Mapping[str, Any]) -> BudgetBinding | None:
-        """The most-specific budget binding declared at ``(action_id, context)``, or ``None``."""
+    def resolve_local(self, activity_id: str, context: Mapping[str, Any]) -> BudgetBinding | None:
+        """The most-specific budget binding declared at ``(activity_id, context)``, or ``None``."""
         ...
 
 
@@ -201,8 +203,8 @@ class InMemoryBudgetRegistry:
     def bindings(self) -> tuple[BudgetBinding, ...]:
         return tuple(self._bindings)
 
-    def resolve_local(self, action_id: str, context: Mapping[str, Any]) -> BudgetBinding | None:
-        """The most-specific budget binding declared at this exact ``(action_id, context)``.
+    def resolve_local(self, activity_id: str, context: Mapping[str, Any]) -> BudgetBinding | None:
+        """The most-specific budget binding declared at this exact ``(activity_id, context)``.
 
         A node may be covered by several matching bindings; the most specific wins, breaking ties by
         ``priority`` (higher wins) and then registration order (first registered wins), so the
@@ -210,7 +212,7 @@ class InMemoryBudgetRegistry:
         """
         winner: BudgetBinding | None = None
         for binding in self._bindings:
-            if not binding.matches(action_id, context):
+            if not binding.matches(activity_id, context):
                 continue
             if winner is None or _outranks(binding, winner):
                 winner = binding
@@ -218,12 +220,12 @@ class InMemoryBudgetRegistry:
 
 
 def resolve_budget(
-    tree: ActionTree,
-    action_id: str,
+    tree: ActivityTree,
+    activity_id: str,
     context: Mapping[str, Any],
     registry: BudgetRegistry,
 ) -> ErrorBudget | None:
-    """Resolve the budget governing ``action_id`` in ``context``, applying inheritance.
+    """Resolve the budget governing ``activity_id`` in ``context``, applying inheritance.
 
     **The pinned rule:** walk from the node up to the root and return the first budget that binds.
     Because the node itself is checked before its ancestors, a node's own declaration **overrides**
@@ -233,7 +235,7 @@ def resolve_budget(
 
     Budgets override, they do not compose: exactly one budget governs a node, never a blend.
     """
-    for node in tree.path_to_root(action_id):
+    for node in tree.path_to_root(activity_id):
         binding = registry.resolve_local(node.id, context)
         if binding is not None:
             return binding.budget

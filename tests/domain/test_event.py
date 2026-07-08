@@ -1,6 +1,6 @@
 """Unit tests for :class:`sailguarding.domain.EventRecord`.
 
-The record is captured before classification, so ``action_id`` is nullable and defaults to
+The record is captured before classification, so ``activity_id`` is nullable and defaults to
 ``None``. Timestamps must be timezone-aware and are normalised to UTC on construction.
 """
 
@@ -26,10 +26,10 @@ def _event(timestamp: datetime, **overrides: object) -> EventRecord:
     return EventRecord(**kwargs)  # type: ignore[arg-type]
 
 
-def test_action_id_defaults_to_none() -> None:
+def test_activity_id_defaults_to_none() -> None:
     event = _event(datetime(2026, 7, 5, 12, 0, tzinfo=UTC))
 
-    assert event.action_id is None
+    assert event.activity_id is None
 
 
 def test_schema_version_defaults_to_current() -> None:
@@ -38,10 +38,10 @@ def test_schema_version_defaults_to_current() -> None:
     assert event.schema_version == SCHEMA_VERSION
 
 
-def test_resolved_action_id_is_kept() -> None:
-    event = _event(datetime(2026, 7, 5, 12, 0, tzinfo=UTC), action_id="write-tests")
+def test_resolved_activity_id_is_kept() -> None:
+    event = _event(datetime(2026, 7, 5, 12, 0, tzinfo=UTC), activity_id="write-tests")
 
-    assert event.action_id == "write-tests"
+    assert event.activity_id == "write-tests"
 
 
 def test_naive_timestamp_raises_value_error() -> None:

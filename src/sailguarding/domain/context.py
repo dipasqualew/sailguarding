@@ -16,7 +16,7 @@ DimensionValue = str | int | float | bool
 
 
 class Context(Mapping[str, DimensionValue]):
-    """An immutable bag of typed dimensions describing where an action runs.
+    """An immutable bag of typed dimensions describing where an activity runs.
 
     Behaves as a read-only mapping so callers can do ``ctx["repo"]`` and
     ``ctx.get("environment")``. Arbitrary string keys are accepted; there is no fixed

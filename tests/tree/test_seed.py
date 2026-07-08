@@ -1,4 +1,4 @@
-"""Unit tests for bottom-up seeding: a triaged event → a named action + a matching selector."""
+"""Unit tests for bottom-up seeding: a triaged event → a named activity + a matching selector."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from sailguarding.classification import (
     SelectorClassificationStrategy,
     TriageEntry,
 )
-from sailguarding.domain import Action, Context, EventRecord
-from sailguarding.tree import ActionTree, seed_action, seeded_rules, selector_for_event
+from sailguarding.domain import Activity, Context, EventRecord
+from sailguarding.tree import ActivityTree, seed_activity, seeded_rules, selector_for_event
 
 
 def _event(tool: str, tool_input: dict[str, object]) -> EventRecord:
@@ -48,23 +48,23 @@ def test_synthesised_selector_matches_the_event_it_came_from() -> None:
     assert selector_for_event(event).matches(event)
 
 
-def test_seed_action_produces_a_node_and_a_recognising_rule() -> None:
+def test_seed_activity_produces_a_node_and_a_recognising_rule() -> None:
     event = _event("Edit", {"file_path": "src/cart.test.ts"})
-    seed = seed_action(_entry(event), action_id="write-tests", label="write the tests")
+    seed = seed_activity(_entry(event), activity_id="write-tests", label="write the tests")
 
-    assert seed.action == Action(id="write-tests", label="write the tests")
-    assert seed.rule.action_id == "write-tests"
+    assert seed.activity == Activity(id="write-tests", label="write the tests")
+    assert seed.rule.activity_id == "write-tests"
     assert seed.rule.selector.matches(event)
 
 
-def test_seed_action_reparents_and_grafts_into_the_tree() -> None:
-    tree = ActionTree(Action(id="ship-update", label="ship the update"))
+def test_seed_activity_reparents_and_grafts_into_the_tree() -> None:
+    tree = ActivityTree(Activity(id="ship-update", label="ship the update"))
     event = _event("Edit", {"file_path": "src/cart.test.ts"})
 
-    seed = seed_action(
-        _entry(event), action_id="write-tests", label="write the tests", parent_id="ship-update"
+    seed = seed_activity(
+        _entry(event), activity_id="write-tests", label="write the tests", parent_id="ship-update"
     )
-    grown = tree.graft("ship-update", seed.action)
+    grown = tree.graft("ship-update", seed.activity)
 
     node = grown.find("write-tests")
     assert node is not None
@@ -78,9 +78,9 @@ def test_seeded_rule_makes_the_classifier_resolve_the_once_unmatched_event() -> 
     empty = SelectorClassificationStrategy(())
     assert empty.classify(event).outcome is Outcome.UNMATCHED
 
-    # Seed an action from the triaged event, then classify with the synthesised rule.
-    seed = seed_action(_entry(event), action_id="write-tests", label="write the tests")
+    # Seed an activity from the triaged event, then classify with the synthesised rule.
+    seed = seed_activity(_entry(event), activity_id="write-tests", label="write the tests")
     strategy = SelectorClassificationStrategy(seeded_rules([seed]))
     result = strategy.classify(event)
     assert result.outcome is Outcome.MATCHED
-    assert result.action_id == "write-tests"
+    assert result.activity_id == "write-tests"

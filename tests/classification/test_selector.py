@@ -157,7 +157,7 @@ def test_selector_to_dict_omits_unset_fields() -> None:
 def test_rule_round_trips() -> None:
     rule = SelectorRule(
         selector=Selector(tool="Edit", context={"repo": "checkout"}),
-        action_id="write-tests",
+        activity_id="write-tests",
         priority=5,
     )
     assert SelectorRule.from_dict(rule.to_dict()) == rule

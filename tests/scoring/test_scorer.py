@@ -20,7 +20,7 @@ FIXED_CLOCK = lambda: datetime(2026, 7, 5, 12, 30, tzinfo=UTC)  # noqa: E731
 FEATURES = FeatureVector(
     signals=(SafeguardSignal("no-flaky-tests", "flakiness", 0.004),),
     remaining_budget=0.9,
-    action_id="write-tests",
+    activity_id="write-tests",
 )
 
 

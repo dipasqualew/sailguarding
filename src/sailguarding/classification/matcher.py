@@ -1,8 +1,8 @@
-"""The matcher — resolves each event to an action and fills ``action_id``.
+"""The matcher — resolves each event to an activity and fills ``activity_id``.
 
 The matcher is the orchestration layer over a :class:`ClassificationStrategy`: it runs the
-injected strategy, and on a resolved match returns the event with ``action_id`` filled. On an
-unresolved event (unmatched *or* ambiguous) it leaves ``action_id`` ``None`` and routes the event
+injected strategy, and on a resolved match returns the event with ``activity_id`` filled. On an
+unresolved event (unmatched *or* ambiguous) it leaves ``activity_id`` ``None`` and routes the event
 to the :class:`TriageQueue`, so nothing is silently dropped.
 
 The strategy is injected, never hard-wired — swap the selector engine for a stub, or later for a
@@ -20,7 +20,7 @@ from sailguarding.domain import EventRecord
 
 
 class Matcher:
-    """Resolve events to actions via a strategy, sending the unresolved to triage."""
+    """Resolve events to activities via a strategy, sending the unresolved to triage."""
 
     def __init__(
         self,
@@ -35,11 +35,11 @@ class Matcher:
         return self._triage
 
     def classify(self, event: EventRecord) -> EventRecord:
-        """Return ``event`` with ``action_id`` filled if resolved; otherwise triage it and
-        return it unchanged (``action_id`` still ``None``)."""
+        """Return ``event`` with ``activity_id`` filled if resolved; otherwise triage it and
+        return it unchanged (``activity_id`` still ``None``)."""
         result = self._strategy.classify(event)
-        if result.action_id is not None:
-            return replace(event, action_id=result.action_id)
+        if result.activity_id is not None:
+            return replace(event, activity_id=result.activity_id)
 
         self._triage.add(
             TriageEntry(event=event, reason=result.outcome, candidates=result.candidates)

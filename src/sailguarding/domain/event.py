@@ -1,8 +1,8 @@
 """The append-only observation the sensor writes and everything downstream reads.
 
 An ``EventRecord`` is captured at pre-tool-use time, before classification runs, which is
-why ``action_id`` is nullable: the sensor records *what the agent did*; resolving it to an
-action, and joining outcomes, happens later. The schema is deliberately domain-agnostic —
+why ``activity_id`` is nullable: the sensor records *what the agent did*; resolving it to an
+activity, and joining outcomes, happens later. The schema is deliberately domain-agnostic —
 it describes "a tool wrote to a file in this repo" and, unchanged, "an agent placed an
 order for this home".
 """
@@ -17,8 +17,9 @@ from typing import Any
 from sailguarding.domain.context import Context
 
 # Bumped whenever the on-disk shape of an EventRecord changes. Written into every record
-# so a reader can migrate old logs.
-SCHEMA_VERSION = 1
+# so a reader can migrate old logs. v2 renamed the resolved-action key ``action_id`` to
+# ``activity_id`` (the Action → Activity rename); v1 logs are not read by this build.
+SCHEMA_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class EventRecord:
     :param context: Resolved context the event ran in.
     :param timestamp: When the event was observed. Must be timezone-aware; normalised to
         UTC on construction.
-    :param action_id: The resolved action, or ``None`` when unclassified (the default at
+    :param activity_id: The resolved activity, or ``None`` when unclassified (the default at
         capture time).
     :param schema_version: The record schema version; defaults to the current one.
     """
@@ -43,7 +44,7 @@ class EventRecord:
     tool_input: Mapping[str, Any]
     context: Context
     timestamp: datetime
-    action_id: str | None = None
+    activity_id: str | None = None
     schema_version: int = field(default=SCHEMA_VERSION)
 
     def __post_init__(self) -> None:

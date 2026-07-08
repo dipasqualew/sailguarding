@@ -20,7 +20,7 @@ than earn it with a track record. See the SPEC's *lifecycle* and *capability too
 | 06 | [Safeguards & bindings](06-safeguards-and-bindings.md) | 04, 05 | done |
 | 07 | [Action tree & error budgets](07-action-tree-and-budgets.md) | 01, 04, 06 | done |
 | 08 | [Evidence ingestion & measurement](08-evidence-ingestion-and-measurement.md) | 02, 06 | done |
-| 09 | [Attestation & the freshness contract](09-attestation-and-the-freshness-contract.md) | 06, 08 | todo |
+| 09 | [Attestation & the freshness contract](09-attestation-and-the-freshness-contract.md) | 06, 08 | done |
 | 10 | [The evidence ingestion API](10-evidence-ingestion-api.md) | 09 | todo |
 | 11 | [Capability tools & requested safeguards](11-capability-tools-and-requested-safeguards.md) | 04, 06, 07, 09 | todo |
 | 12 | [Dashboard: requested → attested → holding → expired](12-dashboard-requested-attested-holding-expired.md) | 09, 10, 11 | todo |

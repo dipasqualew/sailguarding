@@ -1,262 +1,279 @@
-"""The demo router: real scoring, real classification, real decision log — over HTTP shapes."""
+"""The activity-model editor router: real ActivityModel transforms over HTTP shapes.
+
+Every test injects a fresh :class:`InMemoryActivityModelStore`, so there is no I/O and nothing is
+shared between cases — the model round-trips through its serialised form on each save.
+"""
 
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from typing import Any
 
-import pytest
-
-from sailguarding.domain import Context, EventRecord
+from sailguarding.model import InMemoryActivityModelStore
 from sailguarding.web import App
+from sailguarding.web.app import Response
 
 
-def _score(app: App, **params: object) -> dict[str, object]:
-    query = "&".join(f"{k}={v}" for k, v in params.items())
-    response = app.handle("GET", "/api/score", query)
-    assert response.status == 200
+def _app() -> App:
+    return App(InMemoryActivityModelStore())
+
+
+def _post(app: App, path: str, body: dict[str, Any]) -> Response:
+    return app.handle("POST", path, "", json.dumps(body).encode("utf-8"))
+
+
+def _json(response: Response) -> dict[str, Any]:
     assert response.content_type.startswith("application/json")
-    data: dict[str, object] = json.loads(response.body)
+    data: dict[str, Any] = json.loads(response.body)
     return data
 
 
-def _ingest(app: App, **params: object) -> dict[str, object]:
-    query = "&".join(f"{k}={v}" for k, v in params.items())
-    response = app.handle("GET", "/api/ingest", query)
-    assert response.status == 200
-    data: dict[str, object] = json.loads(response.body)
-    return data
+def _model(response: Response) -> dict[str, Any]:
+    data = _json(response)
+    assert response.status == 200, data
+    model = data["model"]
+    assert isinstance(model, dict)
+    return model
 
 
-def _panel(data: dict[str, object]) -> dict[str, dict[str, object]]:
-    """The score payload's safeguard panel, keyed by safeguard id."""
-    safeguards = data["safeguards"]
-    assert isinstance(safeguards, list)
-    return {s["id"]: s for s in safeguards}
+def _view(app: App) -> dict[str, Any]:
+    return _json(app.handle("GET", "/api/model"))
 
 
-def _series(data: dict[str, object], kind: str) -> dict[str, object]:
-    """One evidence series (``"health"`` or ``"efficacy"``) from the score payload."""
-    evidence = data["evidence"]
-    assert isinstance(evidence, dict)
-    series = evidence[kind]
-    assert isinstance(series, dict)
-    return series
+def _find(items: list[dict[str, Any]], label: str) -> dict[str, Any]:
+    return next(i for i in items if i["label"] == label)
+
+
+# --- Reads --------------------------------------------------------------------------------------
 
 
 def test_index_serves_a_populated_html_page() -> None:
-    response = App().handle("GET", "/")
+    response = _app().handle("GET", "/")
     assert response.status == 200
     assert response.content_type.startswith("text/html")
     body = response.body.decode("utf-8")
-    assert "window.__INITIAL__" in body
-    # Every template token must be filled — no leftover placeholders in the served page.
-    assert "__INITIAL_JSON__" not in body
-    assert "__IMPACT_MAX__" not in body
+    assert "window.__MODEL__" in body
+    assert "__MODEL_JSON__" not in body  # the token is filled
+    # The seed model reaches the page so the first paint is populated.
+    assert "Develop new capabilities" in body
+    assert "Human code reviews" in body
 
 
-def test_default_score_is_in_range_and_names_the_function() -> None:
-    data = _score(App())
-    assert 0.0 <= float(data["score"]) <= 1.0  # type: ignore[arg-type]
-    assert data["function"] == {"name": "min-composition", "version": "1"}
-    assert isinstance(data["ceilings"], list)
+def test_api_model_returns_the_seeded_view_model() -> None:
+    view = _view(_app())
+    assert {"activities", "risks", "safeguards", "activity_risks", "mitigations"} <= set(view)
+    labels = [a["label"] for a in view["activities"]]
+    assert labels == ["Develop new capabilities", "Write software", "Test software"]
+    # Top-level activity has a null parent and depth 0; children carry their parent and depth 1.
+    develop = _find(view["activities"], "Develop new capabilities")
+    assert develop["parent_id"] is None and develop["depth"] == 0
+    write = _find(view["activities"], "Write software")
+    assert write["parent_id"] == develop["id"] and write["depth"] == 1
 
 
-def test_impact_caps_hard() -> None:
-    # A catastrophic blast radius ceilings the float at 0 no matter the other inputs.
-    data = _score(App(), impact=100, budget=1.0)
-    assert data["score"] == 0.0
-    assert data["binding"] == "Blast radius"
+def test_view_model_reports_reuse_counts() -> None:
+    view = _view(_app())
+    reviews = _find(view["safeguards"], "Human code reviews")
+    assert reviews["used_by"] == 2  # the shared safeguard covers two activities
+    break_caps = _find(view["risks"], "Break capabilities")
+    assert break_caps["used_by"] == 2
 
 
-def test_budget_pulls_the_float_down() -> None:
-    app = App()
-    full = _score(app, impact=1, budget=1.0)
-    scarce = _score(app, impact=1, budget=0.2)
-    assert full["score"] == 0.9
-    assert scarce["score"] == pytest.approx(0.2)
-    assert scarce["binding"] == "Remaining budget"
+def test_view_model_reports_per_activity_counts() -> None:
+    write = _find(_view(_app())["activities"], "Write software")
+    # Write software faces Break capabilities + Data loss, and has two mitigation edges.
+    assert write["risk_count"] == 2
+    assert write["mitigation_count"] == 2
 
 
-def test_every_score_appends_to_the_decision_log() -> None:
-    app = App()
-    _score(app, impact=1, budget=1.0)
-    _score(app, impact=2, budget=0.5)
-
-    assert len(app.log) == 2
-    decisions = json.loads(app.handle("GET", "/api/decisions").body)["decisions"]
-    assert len(decisions) == 2
-    assert decisions[0]["remaining_budget"] == pytest.approx(0.5)  # newest first
-    assert decisions[0]["action_id"] == "write-tests"
+# --- Mutations ----------------------------------------------------------------------------------
 
 
-def test_score_reports_the_governing_safeguards() -> None:
-    panel = _panel(_score(App(), impact=1, budget=1.0))
-    assert set(panel) == {"impact", "no-flaky-tests"}
-    assert panel["no-flaky-tests"]["measures"] == "health"
-    assert all(s["enabled"] for s in panel.values())
+def test_add_activity_creates_a_child_and_returns_its_id() -> None:
+    app = _app()
+    develop = _find(_view(app)["activities"], "Develop new capabilities")
+    data = _json(_post(app, "/api/activity/add", {"parent_id": develop["id"], "label": "Ship it"}))
+    created = data["created_id"]
+    assert isinstance(created, str) and created
+    child = next(a for a in data["model"]["activities"] if a["id"] == created)
+    assert child["label"] == "Ship it" and child["parent_id"] == develop["id"]
 
 
-def test_disabling_a_binding_moves_the_float() -> None:
-    app = App()
-    # Catastrophic blast radius caps hard while impact governs...
-    capped = _score(app, impact=100, budget=1.0)
-    assert capped["score"] == 0.0
-    # ...toggle it off via the registry and its ceiling no longer reaches the scorer.
-    lifted = _score(app, impact=100, budget=1.0, disabled="impact")
-    assert lifted["score"] == 0.9
-    assert lifted["binding"] == "No flaky tests"
-    assert _panel(lifted)["impact"]["enabled"] is False
+def test_add_top_level_activity_with_null_parent() -> None:
+    app = _app()
+    model = _model(_post(app, "/api/activity/add", {"parent_id": None, "label": "New root"}))
+    new = _find(model["activities"], "New root")
+    assert new["parent_id"] is None and new["depth"] == 0
 
 
-def test_score_reports_the_action_tree_with_resolved_budgets() -> None:
-    data = _score(App(), impact=1, budget=0.6)
-    tree = data["tree"]
-    assert isinstance(tree, list)
-    by_id = {n["id"]: n for n in tree}
-    assert {"ship-update", "write-tests", "update-docs"} <= set(by_id)
-    # The parent declares the budget; the demo leaf inherits it, and that is what the scorer read.
-    assert by_id["ship-update"]["source"] == "declared"
-    assert by_id["write-tests"]["source"] == "inherited"
-    assert by_id["write-tests"]["remaining"] == pytest.approx(0.6)
-    assert data["resolved_budget"] == pytest.approx(0.6)
-
-
-def test_leaf_override_wins_and_drives_the_float() -> None:
-    app = App()
-    # Parent budget is full; without an override the leaf inherits it and budget does not bind.
-    inherited = _score(app, impact=1, budget=1.0)
-    assert inherited["resolved_budget"] == pytest.approx(1.0)
-    # Declare the leaf override: the tighter leaf budget now resolves and pulls the float down.
-    overridden = _score(app, impact=1, budget=1.0, override=1)
-    assert float(overridden["resolved_budget"]) < 1.0  # type: ignore[arg-type]
-    assert overridden["binding"] == "Remaining budget"
-    assert float(overridden["score"]) < float(inherited["score"])  # type: ignore[arg-type]
-    tree = overridden["tree"]
-    assert isinstance(tree, list)
-    leaf = next(n for n in tree if n["id"] == "write-tests")
-    assert leaf["source"] == "declared"
-
-
-def test_index_page_embeds_the_action_tree_panel() -> None:
-    body = App().handle("GET", "/").body.decode("utf-8")
-    assert "action tree" in body  # the panel heading
-    assert "Ship the checkout update" in body  # the root node label reaches the page
-
-
-def test_index_page_embeds_the_safeguards_panel() -> None:
-    body = App().handle("GET", "/").body.decode("utf-8")
-    assert "Govern → safeguards" in body
-    assert "human-dependent" in body  # kind label rendered in JS
-    assert "repo=checkout" in body  # a bound selector reaches the page
-
-
-def test_out_of_range_inputs_are_clamped() -> None:
-    data = _score(App(), impact=999, budget=5)
-    # Clamped, not crashed: impact past the cap still ceilings hard; budget clamps to 1.
-    assert 0.0 <= float(data["score"]) <= 1.0  # type: ignore[arg-type]
-
-
-def test_pipeline_classifies_seed_events() -> None:
-    # A bare App() has no event source, so the panel falls back to the demo scenario.
-    data = json.loads(App().handle("GET", "/api/pipeline").body)
-    events = data["events"]
-    assert data["live"] is False
-    outcomes = {e["input"]: (e["outcome"], e["action_id"]) for e in events}
-    assert outcomes["src/cart.test.ts"] == ("matched", "write-tests")
-    assert outcomes["npm run deploy:staging"] == ("matched", "deploy")
-
-
-def _recorded(tool: str, tool_input: dict[str, object]) -> EventRecord:
-    """A recorded event as the sensor's store would return it, for the injected event source."""
-    return EventRecord(
-        session_id="live",
-        harness_id="claude-code",
-        tool_name=tool,
-        tool_input=tool_input,
-        context=Context(repo="checkout"),
-        timestamp=datetime(2026, 7, 8, 12, 0, tzinfo=UTC),
+def test_rename_activity() -> None:
+    app = _app()
+    write = _find(_view(app)["activities"], "Write software")
+    model = _model(
+        _post(app, "/api/activity/rename", {"id": write["id"], "label": "Author software"})
     )
+    renamed = next(a for a in model["activities"] if a["id"] == write["id"])
+    assert renamed["label"] == "Author software"
 
 
-def test_pipeline_shows_injected_recorded_events_over_the_demo() -> None:
-    # Inject the store the running server wires in: the panel classifies the *real* events.
-    app = App(events_source=lambda: [_recorded("Edit", {"file_path": "src/cart.test.ts"})])
-    data = json.loads(app.handle("GET", "/api/pipeline").body)
-
-    assert data["live"] is True
-    assert data["count"] == 1
-    (row,) = data["events"]
-    assert row["input"] == "src/cart.test.ts"
-    assert (row["outcome"], row["action_id"]) == ("matched", "write-tests")
-
-
-def test_index_page_flags_whether_the_pipeline_is_live_or_demo() -> None:
-    demo = App().handle("GET", "/").body.decode("utf-8")
-    assert "showing the demo scenario" in demo
-
-    app = App(events_source=lambda: [_recorded("Bash", {"command": "npm test"})])
-    live = app.handle("GET", "/").body.decode("utf-8")
-    assert "1 recorded tool call" in live
+def test_delete_activity_cascades_its_risk_and_mitigation_edges() -> None:
+    app = _app()
+    write = _find(_view(app)["activities"], "Write software")
+    model = _model(_post(app, "/api/activity/delete", {"id": write["id"]}))
+    ids = {a["id"] for a in model["activities"]}
+    assert write["id"] not in ids
+    # No dangling edges to the removed activity remain.
+    assert all(e[0] != write["id"] for e in model["activity_risks"])
+    assert all(e[0] != write["id"] for e in model["mitigations"])
 
 
-def test_pipeline_is_fail_soft_when_the_event_source_raises() -> None:
-    # A broken store (missing branch, non-git dir, …) must degrade to the demo, not 500 the page.
-    def boom() -> list[EventRecord]:
-        raise RuntimeError("git exploded")
+def test_create_risk_then_attach_and_detach() -> None:
+    app = _app()
+    develop = _find(_view(app)["activities"], "Develop new capabilities")
+    created = _json(_post(app, "/api/risk/create", {"label": "Regulatory breach"}))
+    rid = created["created_id"]
+    assert isinstance(rid, str)
 
-    data = json.loads(App(events_source=boom).handle("GET", "/api/pipeline").body)
-    assert data["live"] is False
-    assert data["events"]  # the demo scenario still renders
+    attached = _model(
+        _post(app, "/api/activity/risk/attach", {"activity_id": develop["id"], "risk_id": rid})
+    )
+    assert [develop["id"], rid] in attached["activity_risks"]
 
-
-def test_score_reports_the_two_evidence_series() -> None:
-    data = _score(App(), impact=1, budget=1.0)
-    ev = data["evidence"]
-    assert isinstance(ev, dict)
-    assert ev["safeguard_id"] == "no-flaky-tests"
-    health, efficacy = _series(data, "health"), _series(data, "efficacy")
-    # Health and efficacy come back as two separate, clearly-tagged series.
-    assert health["measures"] == "health"
-    assert efficacy["measures"] == "efficacy"
-    # Only the governing health series maps to a ceiling on the float; efficacy never does.
-    assert health["drives_ceiling"] is True
-    assert health["ceiling"] is not None
-    assert efficacy["drives_ceiling"] is False
-    assert efficacy["ceiling"] is None
+    detached = _model(
+        _post(app, "/api/activity/risk/detach", {"activity_id": develop["id"], "risk_id": rid})
+    )
+    assert [develop["id"], rid] not in detached["activity_risks"]
 
 
-def test_ingesting_health_moves_the_signal_and_the_float() -> None:
-    app = App()
-    before_points = len(_series(_score(app, impact=1, budget=1.0), "health")["points"])  # type: ignore[arg-type]
-    # Ingest a bad flakiness reading: worse than 2% collapses the no-flaky ceiling to 0.
-    after = _ingest(app, kind="health", value=0.04, impact=1, budget=1.0)
-    health = _series(after, "health")
-    assert len(health["points"]) == before_points + 1  # type: ignore[arg-type]  # appended
-    assert health["current"] == pytest.approx(0.04)  # it is now the current signal
-    assert after["score"] == 0.0  # and it drove the delegation float to the floor
-    assert after["binding"] == "No flaky tests"
+def test_create_safeguard_carries_kind_and_measures() -> None:
+    app = _app()
+    created = _json(
+        _post(
+            app,
+            "/api/safeguard/create",
+            {"label": "Spend cap", "kind": "structural", "measures": "health", "metric": "usd"},
+        )
+    )
+    sid = created["created_id"]
+    sg = _find(created["model"]["safeguards"], "Spend cap")
+    assert sg["id"] == sid
+    assert sg["kind"] == "structural" and sg["measures"] == "health" and sg["metric"] == "usd"
 
 
-def test_ingesting_efficacy_extends_its_series_without_touching_the_float() -> None:
-    app = App()
-    before = _score(app, impact=1, budget=1.0)
-    before_eff = len(_series(before, "efficacy")["points"])  # type: ignore[arg-type]
-    before_health = _series(before, "health")["points"]
-    after = _ingest(app, kind="efficacy", value=0.5, impact=1, budget=1.0)
-    # The efficacy series grew; the health series is untouched, so the score does not move.
-    assert len(_series(after, "efficacy")["points"]) == before_eff + 1  # type: ignore[arg-type]
-    assert _series(after, "health")["points"] == before_health
-    assert after["score"] == before["score"]  # never conflated: efficacy does not drive the float
+def test_mitigation_add_and_remove() -> None:
+    app = _app()
+    view = _view(app)
+    write = _find(view["activities"], "Write software")
+    opp = _find(view["risks"], "Opportunity cost")
+    reviews = _find(view["safeguards"], "Human code reviews")
+    # A mitigation needs the risk on the activity first.
+    _post(app, "/api/activity/risk/attach", {"activity_id": write["id"], "risk_id": opp["id"]})
+    added = _model(
+        _post(
+            app,
+            "/api/mitigation/add",
+            {"activity_id": write["id"], "risk_id": opp["id"], "safeguard_id": reviews["id"]},
+        )
+    )
+    assert [write["id"], opp["id"], reviews["id"]] in added["mitigations"]
+
+    removed = _model(
+        _post(
+            app,
+            "/api/mitigation/remove",
+            {"activity_id": write["id"], "risk_id": opp["id"], "safeguard_id": reviews["id"]},
+        )
+    )
+    assert [write["id"], opp["id"], reviews["id"]] not in removed["mitigations"]
 
 
-def test_index_page_embeds_the_evidence_panel() -> None:
-    body = App().handle("GET", "/").body.decode("utf-8")
-    assert "Measure → evidence" in body  # the panel heading
-    assert "Ingest measurement" in body  # the ingest control button
+def test_shared_safeguard_reaches_used_by_two_via_the_api() -> None:
+    # Assign one fresh safeguard to a risk on two different activities; its reuse count reads 2.
+    app = _app()
+    view = _view(app)
+    write = _find(view["activities"], "Write software")
+    test = _find(view["activities"], "Test software")
+    data_loss = _find(view["risks"], "Data loss")
+
+    sg = _json(
+        _post(
+            app,
+            "/api/safeguard/create",
+            {"label": "Backups", "kind": "structural", "measures": "health"},
+        )
+    )
+    sid = sg["created_id"]
+    # Data loss already faces Write; attach it to Test too, then mitigate both with Backups.
+    _post(app, "/api/activity/risk/attach", {"activity_id": test["id"], "risk_id": data_loss["id"]})
+    _post(
+        app,
+        "/api/mitigation/add",
+        {"activity_id": write["id"], "risk_id": data_loss["id"], "safeguard_id": sid},
+    )
+    final = _model(
+        _post(
+            app,
+            "/api/mitigation/add",
+            {"activity_id": test["id"], "risk_id": data_loss["id"], "safeguard_id": sid},
+        )
+    )
+    backups = _find(final["safeguards"], "Backups")
+    assert backups["used_by"] == 2
 
 
-def test_unknown_path_is_404_and_non_get_is_405() -> None:
-    app = App()
-    assert app.handle("GET", "/nope").status == 404
-    assert app.handle("POST", "/api/score").status == 405
+# --- Persistence --------------------------------------------------------------------------------
+
+
+def test_mutation_is_persisted_to_the_injected_store() -> None:
+    store = InMemoryActivityModelStore()
+    app = App(store)
+    _post(app, "/api/activity/add", {"parent_id": None, "label": "Persisted root"})
+    # A second App on the same store sees the change — it was saved, not just held in memory.
+    reopened = App(store)
+    labels = [a["label"] for a in reopened.view_model()["activities"]]
+    assert "Persisted root" in labels
+
+
+def test_empty_store_is_seeded_and_saved_on_construction() -> None:
+    store = InMemoryActivityModelStore()
+    App(store)
+    assert store.load() is not None  # seeding persisted the starter model
+
+
+# --- Fail-soft error handling -------------------------------------------------------------------
+
+
+def test_unknown_path_is_404() -> None:
+    assert _app().handle("GET", "/nope").status == 404
+    assert _app().handle("POST", "/api/nope", "", b"{}").status == 404
+
+
+def test_non_get_or_post_method_is_405() -> None:
+    assert _app().handle("DELETE", "/api/model").status == 405
+
+
+def test_malformed_body_is_400() -> None:
+    app = _app()
+    assert app.handle("POST", "/api/activity/add", "", b"not json").status == 400
+    assert app.handle("POST", "/api/activity/add", "", b"[1,2,3]").status == 400  # not an object
+
+
+def test_missing_field_is_400() -> None:
+    # No label field — a client error, not a server crash.
+    response = _post(_app(), "/api/activity/add", {"parent_id": None})
+    assert response.status == 400
+    assert "error" in _json(response)
+
+
+def test_bad_reference_is_400_not_500() -> None:
+    # A KeyError from the transform (unknown activity) degrades to a 400.
+    response = _post(_app(), "/api/activity/rename", {"id": "does-not-exist", "label": "x"})
+    assert response.status == 400
+    assert "error" in _json(response)
+
+
+def test_bad_enum_value_is_400() -> None:
+    response = _post(
+        _app(), "/api/safeguard/create", {"label": "X", "kind": "bogus", "measures": "health"}
+    )
+    assert response.status == 400

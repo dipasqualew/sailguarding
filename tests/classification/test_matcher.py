@@ -1,6 +1,6 @@
 """Unit tests for the :class:`Matcher` and its triage routing.
 
-These verify the orchestration seam: a resolved event comes back with ``action_id`` filled, an
+These verify the orchestration seam: a resolved event comes back with ``activity_id`` filled, an
 unresolved one is routed to the triage queue and retrievable, and the strategy is injectable —
 a stub replaces the selector engine wholesale.
 """
@@ -21,7 +21,7 @@ from tests.classification.conftest import EventFactory
 
 WRITE_TESTS = SelectorRule(
     selector=Selector(tool="Edit", path="**/*.test.ts", context={"repo": "checkout"}),
-    action_id="write-tests",
+    activity_id="write-tests",
 )
 
 
@@ -37,16 +37,16 @@ class _StubStrategy:
         return self._result
 
 
-def test_resolved_event_gets_action_id_filled(make_event: EventFactory) -> None:
+def test_resolved_event_gets_activity_id_filled(make_event: EventFactory) -> None:
     matcher = Matcher(SelectorClassificationStrategy([WRITE_TESTS]))
     event = make_event(tool_input={"file_path": "a.test.ts"}, context={"repo": "checkout"})
 
     classified = matcher.classify(event)
 
-    assert classified.action_id == "write-tests"
+    assert classified.activity_id == "write-tests"
     assert len(matcher.triage) == 0
     # The input is untouched — classification returns a new record.
-    assert event.action_id is None
+    assert event.activity_id is None
 
 
 def test_unmatched_event_lands_in_triage_and_is_retrievable(make_event: EventFactory) -> None:
@@ -55,7 +55,7 @@ def test_unmatched_event_lands_in_triage_and_is_retrievable(make_event: EventFac
 
     classified = matcher.classify(event)
 
-    assert classified.action_id is None
+    assert classified.activity_id is None
     pending = matcher.triage.pending()
     assert len(pending) == 1
     assert pending[0].event == event
@@ -63,14 +63,14 @@ def test_unmatched_event_lands_in_triage_and_is_retrievable(make_event: EventFac
 
 
 def test_ambiguous_event_is_triaged_with_candidates() -> None:
-    stub = _StubStrategy(Classification.ambiguous(("action-a", "action-b")))
+    stub = _StubStrategy(Classification.ambiguous(("activity-a", "activity-b")))
     matcher = Matcher(stub)
 
     matcher.classify(_event())
 
     entry = matcher.triage.pending()[0]
     assert entry.reason is Outcome.AMBIGUOUS
-    assert entry.candidates == ("action-a", "action-b")
+    assert entry.candidates == ("activity-a", "activity-b")
 
 
 def test_strategy_is_injected_not_hard_wired() -> None:
@@ -79,7 +79,7 @@ def test_strategy_is_injected_not_hard_wired() -> None:
 
     classified = matcher.classify(_event())
 
-    assert classified.action_id == "stubbed"
+    assert classified.activity_id == "stubbed"
     assert stub.seen  # the stub really ran in place of the selector engine
 
 
@@ -100,7 +100,7 @@ def test_classify_all_preserves_order_and_triages_the_rest(make_event: EventFact
 
     out = matcher.classify_all([resolved, unmatched])
 
-    assert [e.action_id for e in out] == ["write-tests", None]
+    assert [e.activity_id for e in out] == ["write-tests", None]
     assert len(matcher.triage) == 1
 
 

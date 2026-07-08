@@ -1,7 +1,7 @@
 """Binding a safeguard to the region of work it governs.
 
 A :class:`Safeguard` says *what* must hold; a :class:`SafeguardBinding` says *where* — which
-``(action, context)`` region it governs. It binds through the same :class:`Selector` language
+``(activity, context)`` region it governs. It binds through the same :class:`Selector` language
 classification uses (task 04), reused verbatim: the SPEC's "No flaky tests, ``team=*,
 repo=checkout``" is a safeguard bound to a region of context. Binding through the shared selector
 is deliberate — if the predicate language ever grows (e.g. sequences, open question #3), safeguards
@@ -12,11 +12,11 @@ A binding narrows on two independent axes:
 - **Context**, via the selector's context predicate (:meth:`Selector.matches_context`). Only the
   context half of the selector participates — a binding delimits a *region of context*, not an
   event, so ``tool``/``path``/``command`` fields (if any) are ignored at governance time.
-- **Action**, via an ``action`` id-glob. ``"*"`` (the default) governs every action in the region;
-  a concrete id (``"write-tests"``) or a glob (``"write-*"``) scopes the safeguard to particular
-  actions.
+- **Activity**, via an ``activity`` id-glob. ``"*"`` (the default) governs every activity in the
+  region; a concrete id (``"write-tests"``) or a glob (``"write-*"``) scopes the safeguard to
+  particular activities.
 
-Both must hold for the binding to govern an ``(action, context)``.
+Both must hold for the binding to govern an ``(activity, context)``.
 """
 
 from __future__ import annotations
@@ -33,48 +33,48 @@ from sailguarding.safeguards.safeguard import Safeguard
 
 @dataclass(frozen=True)
 class SafeguardBinding:
-    """A :class:`Safeguard` bound to the ``(action, context)`` region it governs.
+    """A :class:`Safeguard` bound to the ``(activity, context)`` region it governs.
 
     :param safeguard: The governed safeguard.
     :param selector: The context predicate delimiting the region; its context dimensions must match
         the resolved context. Event-attribute fields are not evaluated here (see the module
         docstring).
-    :param action: An action-id glob (default ``"*"``, every action). A binding governs an action
-        only when this glob matches the action's id.
+    :param activity: An activity-id glob (default ``"*"``, every activity). A binding governs an
+        activity only when this glob matches the activity's id.
     :param priority: Breaks ties between equally specific bindings *of the same safeguard* when the
         registry dedupes an overlap (higher wins). Mirrors :class:`SelectorRule.priority`.
     """
 
     safeguard: Safeguard
     selector: Selector = field(default_factory=Selector)
-    action: str = "*"
+    activity: str = "*"
     priority: int = 0
 
-    def matches(self, action_id: str, context: Mapping[str, Any]) -> bool:
-        """True when this binding governs ``action_id`` running in ``context``.
+    def matches(self, activity_id: str, context: Mapping[str, Any]) -> bool:
+        """True when this binding governs ``activity_id`` running in ``context``.
 
-        Both axes must hold: the ``action`` glob matches ``action_id`` and the selector's context
-        predicate matches ``context``.
+        Both axes must hold: the ``activity`` glob matches ``activity_id`` and the selector's
+        context predicate matches ``context``.
         """
-        return fnmatchcase(action_id, self.action) and self.selector.matches_context(context)
+        return fnmatchcase(activity_id, self.activity) and self.selector.matches_context(context)
 
     @property
     def specificity(self) -> int:
         """How many axes this binding actually narrows on — the overlap tie-breaker.
 
         The selector's own :attr:`~Selector.specificity` (context constraints that narrow) plus one
-        if the ``action`` glob is not the bare ``"*"`` wildcard. A more specific binding wins when
+        if the ``activity`` glob is not the bare ``"*"`` wildcard. A more specific binding wins when
         two bindings of the *same* safeguard both match (see :mod:`.registry`), mirroring the
         classifier's specificity handling.
         """
-        return self.selector.specificity + (0 if self.action == "*" else 1)
+        return self.selector.specificity + (0 if self.activity == "*" else 1)
 
     def to_dict(self) -> dict[str, Any]:
         """A JSON-serialisable form; the selector serialises through its own :meth:`to_dict`."""
         return {
             "safeguard": self.safeguard.to_dict(),
             "selector": self.selector.to_dict(),
-            "action": self.action,
+            "activity": self.activity,
             "priority": self.priority,
         }
 
@@ -84,7 +84,7 @@ class SafeguardBinding:
         return cls(
             safeguard=Safeguard.from_dict(data["safeguard"]),
             selector=Selector.from_dict(data.get("selector", {})),
-            action=data.get("action", "*"),
+            activity=data.get("activity", "*"),
             priority=data.get("priority", 0),
         )
 

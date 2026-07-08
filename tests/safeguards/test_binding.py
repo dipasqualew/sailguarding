@@ -1,4 +1,4 @@
-"""The :class:`SafeguardBinding`: matching over ``(action, context)`` and round-trip."""
+"""The :class:`SafeguardBinding`: matching over ``(activity, context)`` and round-trip."""
 
 from __future__ import annotations
 
@@ -30,17 +30,17 @@ def _binding(**over: object) -> SafeguardBinding:
 
 
 def test_matches_when_context_and_action_both_hold() -> None:
-    binding = _binding(action="write-tests")
+    binding = _binding(activity="write-tests")
     assert binding.matches("write-tests", Context(repo="checkout")) is True
 
 
 def test_context_miss_does_not_match() -> None:
-    binding = _binding(action="*")
+    binding = _binding(activity="*")
     assert binding.matches("write-tests", Context(repo="billing")) is False
 
 
 def test_action_glob_scopes_the_binding() -> None:
-    binding = _binding(action="write-*")
+    binding = _binding(activity="write-*")
     ctx = Context(repo="checkout")
     assert binding.matches("write-tests", ctx) is True
     assert binding.matches("write-code", ctx) is True
@@ -48,7 +48,7 @@ def test_action_glob_scopes_the_binding() -> None:
 
 
 def test_default_action_glob_governs_every_action() -> None:
-    binding = _binding()  # action defaults to "*"
+    binding = _binding()  # activity defaults to "*"
     ctx = Context(repo="checkout")
     assert binding.matches("write-tests", ctx) is True
     assert binding.matches("deploy", ctx) is True
@@ -69,12 +69,12 @@ def test_event_attributes_on_the_selector_are_ignored_at_governance_time() -> No
 
 
 def test_specificity_counts_context_and_a_concrete_action() -> None:
-    assert _binding(action="*").specificity == 1  # one context constraint
-    assert _binding(action="write-tests").specificity == 2  # + a concrete action
+    assert _binding(activity="*").specificity == 1  # one context constraint
+    assert _binding(activity="write-tests").specificity == 2  # + a concrete activity
 
 
 def test_round_trips_through_json() -> None:
-    binding = _binding(action="write-tests", priority=3)
+    binding = _binding(activity="write-tests", priority=3)
     assert SafeguardBinding.from_json(binding.to_json()) == binding
 
 

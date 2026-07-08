@@ -6,9 +6,9 @@ storage strategy. Everything it depends on — the sink, the context resolver, t
 clock — is injected, so the same function drives a live branch sink in production and an
 in-memory sink under the deterministic mock, with no branch in the code between the two.
 
-The record is captured with ``action_id`` null: this is pre-tool-use, before classification
+The record is captured with ``activity_id`` null: this is pre-tool-use, before classification
 runs (task 04) and before any outcome exists (evidence ingestion, later). The sensor records
-*what the agent intends to do*; resolving it to an action and joining an outcome happen later.
+*what the agent intends to do*; resolving it to an activity and joining an outcome happen later.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def record_event(
         tool_input=tool_input,
         context=context,
         timestamp=clock(),
-        action_id=None,
+        activity_id=None,
     )
     storage_append(record)
     return record

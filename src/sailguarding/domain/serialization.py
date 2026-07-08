@@ -28,7 +28,7 @@ def event_to_dict(event: EventRecord) -> dict[str, Any]:
         "tool_name": event.tool_name,
         "tool_input": dict(event.tool_input),
         "context": dict(event.context),
-        "action_id": event.action_id,
+        "activity_id": event.activity_id,
     }
 
 
@@ -51,7 +51,7 @@ def event_from_dict(data: dict[str, Any]) -> EventRecord:
         tool_input=data["tool_input"],
         context=Context(data["context"]),
         timestamp=_decode_timestamp(data["timestamp"]),
-        action_id=data.get("action_id"),
+        activity_id=data.get("activity_id"),
         schema_version=version,
     )
 

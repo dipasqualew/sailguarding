@@ -1,11 +1,11 @@
-"""The binding registry — which safeguards govern this ``(action, context)``?
+"""The binding registry — which safeguards govern this ``(activity, context)``?
 
-This answers the question task 09 will build a feature vector from: given an action running in a
+This answers the question task 09 will build a feature vector from: given an activity running in a
 context, which safeguards must hold for it to be delegable? It evaluates every bound selector and
 returns the ones that match.
 
-**Overlap is not a conflict — it is the point.** Classification resolves an event to *one* action
-and treats disagreement as ambiguity (route to triage). Governance is the opposite: an action is
+**Overlap is not a conflict — it is the point.** Classification resolves an event to *one* activity
+and treats disagreement as ambiguity (route to triage). Governance is the opposite: an activity is
 routinely governed by *several distinct* safeguards at once (blast radius **and** no-flaky-tests),
 and the registry returns the **union** of them. A second, third, fourth safeguard matching is
 exactly what a region of context is meant to accumulate.
@@ -17,7 +17,7 @@ would let a scoring function see a safeguard's ceiling twice. So the registry ke
 per safeguard id**, choosing the **most specific** (highest :attr:`SafeguardBinding.specificity`),
 breaking ties by **priority** (higher wins), and — if still tied — by **registration order** (first
 registered wins, so the outcome is deterministic). This mirrors the classifier's specificity → then
-priority handling; it just resolves *which binding of a safeguard* rather than *which action*.
+priority handling; it just resolves *which binding of a safeguard* rather than *which activity*.
 
 The registry is a pluggable seam: :class:`BindingRegistry` is the minimal contract and
 :class:`InMemoryBindingRegistry` is the injectable default, so a test drives governance with a stub
@@ -34,14 +34,14 @@ from sailguarding.safeguards.binding import SafeguardBinding
 
 @runtime_checkable
 class BindingRegistry(Protocol):
-    """Resolve the safeguards that govern an ``(action, context)``.
+    """Resolve the safeguards that govern an ``(activity, context)``.
 
     The whole contract is one method. A stub returning a fixed list is a valid registry, which is
     what lets downstream code (feature-vector assembly, the scorer) run without a real risk model.
     """
 
-    def resolve(self, action_id: str, context: Mapping[str, Any]) -> list[SafeguardBinding]:
-        """The bindings governing ``action_id`` in ``context``, one per safeguard id."""
+    def resolve(self, activity_id: str, context: Mapping[str, Any]) -> list[SafeguardBinding]:
+        """The bindings governing ``activity_id`` in ``context``, one per safeguard id."""
         ...
 
 
@@ -63,14 +63,14 @@ class InMemoryBindingRegistry:
     def bindings(self) -> tuple[SafeguardBinding, ...]:
         return tuple(self._bindings)
 
-    def resolve(self, action_id: str, context: Mapping[str, Any]) -> list[SafeguardBinding]:
+    def resolve(self, activity_id: str, context: Mapping[str, Any]) -> list[SafeguardBinding]:
         """The governing bindings, deduped to the most specific one per safeguard id.
 
         Returned in first-appearance order of each safeguard, so the output is stable and readable.
         """
         winners: dict[str, SafeguardBinding] = {}
         for binding in self._bindings:
-            if not binding.matches(action_id, context):
+            if not binding.matches(activity_id, context):
                 continue
             sid = binding.safeguard.id
             incumbent = winners.get(sid)

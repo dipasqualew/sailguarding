@@ -24,7 +24,7 @@ def make_event(
     session_id: str = "session-1",
     timestamp: datetime | None = None,
     tool_name: str = "Edit",
-    action_id: str | None = None,
+    activity_id: str | None = None,
 ) -> EventRecord:
     """Build a representative :class:`EventRecord` with sensible defaults."""
     return EventRecord(
@@ -34,7 +34,7 @@ def make_event(
         tool_input={"file_path": "checkout.py", "content": "print('hi')"},
         context=Context(team="core", repo="checkout"),
         timestamp=timestamp if timestamp is not None else datetime(2026, 7, 5, 12, 30, tzinfo=UTC),
-        action_id=action_id,
+        activity_id=activity_id,
     )
 
 

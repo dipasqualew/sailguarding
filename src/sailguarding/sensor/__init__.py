@@ -1,7 +1,7 @@
 """The Claude Code sensor: the first harness adapter.
 
 The integration point is a **pre-tool-use hook**. It is a **sensor now** — it records what the
-agent is about to do — and the **actuator later** — the same hook gates the action against a
+agent is about to do — and the **actuator later** — the same hook gates the activity against a
 behaviour band. Building on this exact hook is what makes enforcement an additive step rather
 than a rewrite.
 

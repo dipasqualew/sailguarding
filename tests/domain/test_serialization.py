@@ -30,7 +30,7 @@ def _unclassified_event() -> EventRecord:
         tool_input={"file_path": "checkout.py"},
         context=Context(team="core", repo="checkout"),
         timestamp=datetime(2026, 7, 5, 12, 30, tzinfo=UTC),
-        action_id=None,
+        activity_id=None,
     )
 
 
@@ -42,12 +42,12 @@ def _classified_event() -> EventRecord:
         tool_input={"note": "café crème — naïve façade 日本語"},
         context=Context(home="cottage", room="lounge", seats=3, delivered=False),
         timestamp=datetime(2026, 7, 5, 14, 30, tzinfo=timezone(timedelta(hours=2))),
-        action_id="buy-sofa",
+        activity_id="buy-sofa",
     )
 
 
 EVENT_CASES = [
-    pytest.param(_unclassified_event(), id="unclassified-null-action"),
+    pytest.param(_unclassified_event(), id="unclassified-null-activity"),
     pytest.param(_classified_event(), id="classified-nonascii-nonutc-tz"),
 ]
 
@@ -83,7 +83,7 @@ def test_two_equal_events_encode_identically() -> None:
         tool_input={"note": "café crème — naïve façade 日本語"},
         context=Context(delivered=False, seats=3, room="lounge", home="cottage"),
         timestamp=datetime(2026, 7, 5, 12, 30, tzinfo=UTC),
-        action_id="buy-sofa",
+        activity_id="buy-sofa",
     )
 
     assert a == b
@@ -122,11 +122,11 @@ def test_non_ascii_preserved_verbatim() -> None:
     assert "café crème — naïve façade 日本語" in text
 
 
-def test_action_id_null_encoded_as_json_null() -> None:
+def test_activity_id_null_encoded_as_json_null() -> None:
     event = _unclassified_event()
 
-    assert event_to_dict(event)["action_id"] is None
-    assert json.loads(event_to_json(event))["action_id"] is None
+    assert event_to_dict(event)["activity_id"] is None
+    assert json.loads(event_to_json(event))["activity_id"] is None
 
 
 def test_from_dict_missing_schema_version_raises() -> None:

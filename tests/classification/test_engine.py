@@ -17,7 +17,7 @@ from tests.classification.conftest import EventFactory
 
 WRITE_TESTS = SelectorRule(
     selector=Selector(tool="Edit", path="**/*.test.ts", context={"repo": "checkout"}),
-    action_id="write-tests",
+    activity_id="write-tests",
 )
 
 
@@ -28,7 +28,7 @@ def test_matches_write_tests_in_checkout(make_event: EventFactory) -> None:
     result = engine.classify(event)
 
     assert result.outcome is Outcome.MATCHED
-    assert result.action_id == "write-tests"
+    assert result.activity_id == "write-tests"
 
 
 def test_same_edit_elsewhere_does_not_match(make_event: EventFactory) -> None:
@@ -38,7 +38,7 @@ def test_same_edit_elsewhere_does_not_match(make_event: EventFactory) -> None:
     result = engine.classify(event)
 
     assert result.outcome is Outcome.UNMATCHED
-    assert result.action_id is None
+    assert result.activity_id is None
 
 
 def test_unmatched_when_no_rule_matches(make_event: EventFactory) -> None:
@@ -48,10 +48,10 @@ def test_unmatched_when_no_rule_matches(make_event: EventFactory) -> None:
 
 
 def test_most_specific_selector_wins(make_event: EventFactory) -> None:
-    broad = SelectorRule(selector=Selector(tool="Edit"), action_id="edit-something")
+    broad = SelectorRule(selector=Selector(tool="Edit"), activity_id="edit-something")
     specific = SelectorRule(
         selector=Selector(tool="Edit", path="**/*.test.ts", context={"repo": "checkout"}),
-        action_id="write-tests",
+        activity_id="write-tests",
     )
     # Registration order deliberately puts the broad rule first to prove order is irrelevant.
     engine = SelectorClassificationStrategy([broad, specific])
@@ -60,44 +60,44 @@ def test_most_specific_selector_wins(make_event: EventFactory) -> None:
     result = engine.classify(event)
 
     assert result.outcome is Outcome.MATCHED
-    assert result.action_id == "write-tests"
+    assert result.activity_id == "write-tests"
 
 
 def test_priority_breaks_specificity_ties(make_event: EventFactory) -> None:
-    low = SelectorRule(selector=Selector(tool="Edit"), action_id="low", priority=1)
-    high = SelectorRule(selector=Selector(tool="Edit"), action_id="high", priority=9)
+    low = SelectorRule(selector=Selector(tool="Edit"), activity_id="low", priority=1)
+    high = SelectorRule(selector=Selector(tool="Edit"), activity_id="high", priority=9)
     engine = SelectorClassificationStrategy([low, high])
 
     result = engine.classify(make_event(tool_name="Edit"))
 
-    assert result.action_id == "high"
+    assert result.activity_id == "high"
 
 
 def test_tie_on_same_action_is_not_a_conflict(make_event: EventFactory) -> None:
-    # Two equally specific rules that name the *same* action: resolve to it, no ambiguity.
-    by_path = SelectorRule(selector=Selector(path="**/*.test.ts"), action_id="write-tests")
-    by_tool = SelectorRule(selector=Selector(tool="Edit"), action_id="write-tests")
+    # Two equally specific rules that name the *same* activity: resolve to it, no ambiguity.
+    by_path = SelectorRule(selector=Selector(path="**/*.test.ts"), activity_id="write-tests")
+    by_tool = SelectorRule(selector=Selector(tool="Edit"), activity_id="write-tests")
     engine = SelectorClassificationStrategy([by_path, by_tool])
     event = make_event(tool_name="Edit", tool_input={"file_path": "a.test.ts"})
 
     result = engine.classify(event)
 
     assert result.outcome is Outcome.MATCHED
-    assert result.action_id == "write-tests"
+    assert result.activity_id == "write-tests"
 
 
 def test_ambiguous_when_top_rules_disagree(make_event: EventFactory) -> None:
-    # Equal specificity, equal priority, different actions: fail toward caution — do not guess.
-    a = SelectorRule(selector=Selector(tool="Edit"), action_id="action-a")
-    b = SelectorRule(selector=Selector(context={"repo": "checkout"}), action_id="action-b")
+    # Equal specificity, equal priority, different activities: fail toward caution — do not guess.
+    a = SelectorRule(selector=Selector(tool="Edit"), activity_id="activity-a")
+    b = SelectorRule(selector=Selector(context={"repo": "checkout"}), activity_id="activity-b")
     engine = SelectorClassificationStrategy([a, b])
     event = make_event(tool_name="Edit", context={"repo": "checkout"})
 
     result = engine.classify(event)
 
     assert result.outcome is Outcome.AMBIGUOUS
-    assert result.action_id is None
-    assert result.candidates == ("action-a", "action-b")
+    assert result.activity_id is None
+    assert result.candidates == ("activity-a", "activity-b")
 
 
 def test_register_adds_a_rule(make_event: EventFactory) -> None:
@@ -106,4 +106,4 @@ def test_register_adds_a_rule(make_event: EventFactory) -> None:
 
     engine.register(WRITE_TESTS)
     event = make_event(tool_input={"file_path": "a.test.ts"}, context={"repo": "checkout"})
-    assert engine.classify(event).action_id == "write-tests"
+    assert engine.classify(event).activity_id == "write-tests"

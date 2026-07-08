@@ -1,10 +1,10 @@
-"""Classification — resolving a raw tool event to the action it actually is.
+"""Classification — resolving a raw tool event to the activity it actually is.
 
 Per the SPEC, classification is part of the safeguarding calculus, not plumbing: you cannot
-guard an action you failed to recognise. So it is a **pluggable strategy**
+guard an activity you failed to recognise. So it is a **pluggable strategy**
 (:class:`ClassificationStrategy`), and this package ships the honest first one — a deterministic
 :class:`SelectorClassificationStrategy` over a declarative :class:`Selector` language. The
-:class:`Matcher` runs a strategy, fills ``action_id`` on resolved events, and routes the rest to
+:class:`Matcher` runs a strategy, fills ``activity_id`` on resolved events, and routes the rest to
 a :class:`TriageQueue` for bottom-up modelling. Higher-quality strategies (ML, LLM) arrive later
 behind the same seam.
 """

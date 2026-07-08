@@ -19,5 +19,5 @@ def sample_event() -> EventRecord:
         tool_input={"file_path": "checkout.py", "content": "print('hi')"},
         context=Context(team="core", repo="checkout"),
         timestamp=datetime(2026, 7, 5, 12, 30, 0, tzinfo=UTC),
-        action_id=None,
+        activity_id=None,
     )

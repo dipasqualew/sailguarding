@@ -1,9 +1,10 @@
 """The governed safeguard — the SPEC's *separation of powers* made into a type.
 
 A safeguard has two authors, and this type carries only what the **safeguarding team** owns: the
-*class* (what must be true for an action to be delegable) and the declarations that decide how much
-a signal is allowed to move the float. The **operating team**'s half — how *this* context actually
-computes and ingests the metric — is not here; that is measurement (task 08). Nor is the *scoring*
+*class* (what must be true for an activity to be delegable) and the declarations that decide how
+much a signal is allowed to move the float. The **operating team**'s half — how *this* context
+actually computes and ingests the metric — is not here; that is measurement (task 08). Nor is the
+*scoring*
 (how failing the metric maps to a ceiling): that lives in the team's scoring function (task 05), a
 competitive asset the platform never owns. A :class:`Safeguard` is the governance metadata the
 platform *does* hold and serve.
@@ -20,6 +21,13 @@ the delegation float:
   as efficacy is the trap the SPEC names; the type forces each safeguard to *declare* which, so the
   two are never conflated — SPEC design principle 2, *measure honestly*.
 
+And one declaration about *time*: the **cadence** (an optional :class:`~datetime.timedelta`). A
+safeguard proved last month tells you nothing today, so the safeguarding team declares how often it
+must be re-evidenced; the operating team's attestation buys allowance for exactly one such window
+(see :class:`~sailguarding.measurement.Evidence`). ``None`` is a safeguard that never expires. This
+is SPEC design principle 1, *autonomy decays when safeguards do* — it only bites if evidence can go
+stale, and the cadence is where the shelf life is set.
+
 The type is **versioned, serialisable, and round-trip stable** (``Safeguard.from_json(s.to_json())
 == s``) because a binding — and, downstream, a logged decision — records it verbatim. It is
 domain-agnostic on purpose: the same shape governs a code edit and a sofa purchase.
@@ -31,11 +39,12 @@ import enum
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 # Bumped whenever the serialised shape of a Safeguard changes, so a reader can tell which schema
-# produced a stored record.
-SAFEGUARD_SCHEMA_VERSION = 1
+# produced a stored record. v2 added the renewal cadence (task 09).
+SAFEGUARD_SCHEMA_VERSION = 2
 
 
 class SafeguardKind(enum.Enum):
@@ -67,7 +76,7 @@ class Measurement(enum.Enum):
 
 @dataclass(frozen=True)
 class Safeguard:
-    """A control the safeguarding team requires for an action to be delegable.
+    """A control the safeguarding team requires for an activity to be delegable.
 
     :param id: Stable identifier, referenced by a signal and by every binding (e.g.
         ``"no-flaky-tests"``).
@@ -76,6 +85,9 @@ class Safeguard:
         The platform carries the name; the scoring function decides what a value means.
     :param kind: :class:`SafeguardKind` — structural or human-dependent.
     :param measures: :class:`Measurement` — whether ``metric`` is health or efficacy.
+    :param cadence: How often the safeguard must be re-evidenced — the renewal interval an
+        attestation's validity window is derived from. ``None`` (the default) is a safeguard that
+        never expires; a :class:`~datetime.timedelta` gives evidence a shelf life.
     :param schema_version: The record schema version; defaults to the current one.
     """
 
@@ -84,10 +96,16 @@ class Safeguard:
     metric: str
     kind: SafeguardKind
     measures: Measurement
+    cadence: timedelta | None = None
     schema_version: int = field(default=SAFEGUARD_SCHEMA_VERSION)
 
     def to_dict(self) -> dict[str, Any]:
-        """A JSON-compatible dict; enums are stored by their stable string values."""
+        """A JSON-compatible dict; enums are stored by their stable string values.
+
+        The cadence is stored as ``cadence_seconds`` (a plain number, or ``null`` for a
+        never-expiring safeguard) rather than a ``timedelta`` repr, so the encoding is canonical and
+        language-neutral. ``timedelta(seconds=total_seconds())`` reconstructs it exactly.
+        """
         return {
             "schema_version": self.schema_version,
             "id": self.id,
@@ -95,6 +113,7 @@ class Safeguard:
             "metric": self.metric,
             "kind": self.kind.value,
             "measures": self.measures.value,
+            "cadence_seconds": (self.cadence.total_seconds() if self.cadence is not None else None),
         }
 
     @classmethod
@@ -106,12 +125,14 @@ class Safeguard:
                 f"unsupported Safeguard schema_version {version!r}; "
                 f"this build reads version {SAFEGUARD_SCHEMA_VERSION}"
             )
+        cadence_seconds = data.get("cadence_seconds")
         return cls(
             id=data["id"],
             label=data["label"],
             metric=data["metric"],
             kind=SafeguardKind(data["kind"]),
             measures=Measurement(data["measures"]),
+            cadence=(timedelta(seconds=cadence_seconds) if cadence_seconds is not None else None),
             schema_version=version,
         )
 

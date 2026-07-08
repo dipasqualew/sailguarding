@@ -13,7 +13,7 @@ sets the ceiling, so no single failing control can be outvoted by healthy ones.
 Both guarantees the SPEC asks of any scoring function fall straight out of the same ``min``:
 
 - **Impact caps hard.** Impact is just another safeguard whose ceiling collapses to ``0`` for a
-  catastrophic action. Because the float is the minimum, a catastrophic impact ceilings the whole
+  catastrophic activity. Because the float is the minimum, a catastrophic impact ceilings the whole
   score at ``0`` no matter how healthy detection is or how fat the budget is — the FMEA-RPN trap of
   a mean hiding a catastrophic-but-rare term is structurally impossible here.
 - **Remaining budget pulls the float down.** The remaining budget enters as one more ceiling, so a

@@ -1,4 +1,4 @@
-"""The :class:`Evidence` record: kind, versioning, UTC normalisation, round-trip stability."""
+"""The :class:`Evidence` record: kind, attestation, freshness, versioning, round-trip stability."""
 
 from __future__ import annotations
 
@@ -37,7 +37,83 @@ def test_kind_serialises_by_stable_string_value(
 
 
 def test_serialised_form_is_versioned(evidence_factory: Callable[..., Evidence]) -> None:
-    assert evidence_factory().to_dict()["schema_version"] == 1
+    assert evidence_factory().to_dict()["schema_version"] == 2
+
+
+# --- Attestation: reasoning, the validity window, and a value-less structural claim (task 09) ---
+
+
+def test_carries_reasoning_and_round_trips(evidence_factory: Callable[..., Evidence]) -> None:
+    e = evidence_factory(reasoning="CI ran the suite green over the last 200 runs.")
+    assert e.reasoning == "CI ran the suite green over the last 200 runs."
+    assert Evidence.from_json(e.to_json()) == e
+
+
+def test_validity_window_round_trips(evidence_factory: Callable[..., Evidence]) -> None:
+    e = evidence_factory(valid_for=timedelta(days=7))
+    assert e.valid_for == timedelta(days=7)
+    assert e.to_dict()["valid_for_seconds"] == 7 * 86400
+    assert Evidence.from_json(e.to_json()) == e
+
+
+def test_no_window_means_never_expires(evidence_factory: Callable[..., Evidence]) -> None:
+    e = evidence_factory(valid_for=None)
+    assert e.expires_at is None
+    assert e.to_dict()["valid_for_seconds"] is None
+    assert e.is_fresh(datetime(2999, 1, 1, tzinfo=UTC))
+
+
+def test_expires_at_is_derived_from_timestamp_plus_window() -> None:
+    e = Evidence(
+        safeguard_id="no-flaky-tests",
+        metric="flakiness",
+        value=0.01,
+        measures=Measurement.HEALTH,
+        valid_for=timedelta(days=7),
+        timestamp=datetime(2026, 7, 5, 9, 0, tzinfo=UTC),
+    )
+    assert e.expires_at == datetime(2026, 7, 12, 9, 0, tzinfo=UTC)
+
+
+def test_is_fresh_is_a_cliff_at_expiry() -> None:
+    e = Evidence(
+        safeguard_id="no-flaky-tests",
+        metric="flakiness",
+        value=0.01,
+        measures=Measurement.HEALTH,
+        valid_for=timedelta(days=7),
+        timestamp=datetime(2026, 7, 5, 9, 0, tzinfo=UTC),
+    )
+    assert e.is_fresh(datetime(2026, 7, 12, 8, 59, tzinfo=UTC)) is True
+    assert e.is_fresh(datetime(2026, 7, 12, 9, 0, tzinfo=UTC)) is False  # stale from the instant on
+
+
+def test_structural_attestation_has_no_numeric_value() -> None:
+    # A value-less structural claim ("ephemeral envs verified") is representable and round-trips.
+    structural = Evidence(
+        safeguard_id="ephemeral-envs",
+        metric="verified",
+        value=None,
+        measures=Measurement.EFFICACY,
+        reasoning="Every deploy provisions a throwaway env and tears it down.",
+        valid_for=timedelta(days=1),
+        timestamp=datetime(2026, 7, 5, 9, 0, tzinfo=UTC),
+    )
+    assert structural.value is None
+    assert structural.to_dict()["value"] is None
+    assert Evidence.from_json(structural.to_json()) == structural
+
+
+def test_rejects_a_non_positive_window() -> None:
+    with pytest.raises(ValueError, match="valid_for must be a positive window"):
+        Evidence(
+            safeguard_id="no-flaky-tests",
+            metric="flakiness",
+            value=0.01,
+            measures=Measurement.HEALTH,
+            valid_for=timedelta(0),
+            timestamp=datetime(2026, 7, 5, 9, 0, tzinfo=UTC),
+        )
 
 
 def test_rejects_unknown_schema_version(evidence_factory: Callable[..., Evidence]) -> None:

@@ -1,6 +1,6 @@
 """The declarative selector language: predicates over ``(event attributes, context)``.
 
-An **action is defined by a selector** — a serialisable predicate that must be true of both
+An **activity is defined by a selector** — a serialisable predicate that must be true of both
 sides of an event at once: the tool attributes (tool name, the file path it touched, the shell
 command it ran) *and* the context labels it ran in (``repo=checkout``, ``team=*``). Both sides
 live in one :class:`Selector`; that single-object requirement is what lets safeguards (task 05+)
@@ -81,7 +81,7 @@ class Selector:
         """True when this selector's context predicate holds for ``context`` alone.
 
         The context half of :meth:`matches`, split out so a caller with no event — a safeguard
-        binding resolving over an ``(action, context)`` (task 06) — can evaluate the *same*
+        binding resolving over an ``(activity, context)`` (task 06) — can evaluate the *same*
         predicate language against a bare :class:`~sailguarding.domain.Context`. Each named
         dimension must be present and its value glob-match; a selector that names no context
         dimensions matches every context. The event-attribute fields (``tool``/``path``/
@@ -133,21 +133,21 @@ class Selector:
 
 @dataclass(frozen=True)
 class SelectorRule:
-    """A selector bound to the action it recognises, with a tie-break priority.
+    """A selector bound to the activity it recognises, with a tie-break priority.
 
     :param selector: The predicate to evaluate.
-    :param action_id: The action an event resolves to when this rule wins.
+    :param activity_id: The activity an event resolves to when this rule wins.
     :param priority: Breaks ties between equally specific selectors (higher wins). Defaults to 0.
     """
 
     selector: Selector
-    action_id: str
+    activity_id: str
     priority: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "selector": self.selector.to_dict(),
-            "action_id": self.action_id,
+            "activity_id": self.activity_id,
             "priority": self.priority,
         }
 
@@ -155,7 +155,7 @@ class SelectorRule:
     def from_dict(cls, data: Mapping[str, Any]) -> SelectorRule:
         return cls(
             selector=Selector.from_dict(data["selector"]),
-            action_id=data["action_id"],
+            activity_id=data["activity_id"],
             priority=data.get("priority", 0),
         )
 

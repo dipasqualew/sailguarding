@@ -2,9 +2,9 @@
 
 This is *not* the event-log storage of task 02, and deliberately so. Git is a fine append-only log
 and a terrible time-series database; derived safeguard metrics are a separate concern with a
-separate lifecycle (joined to actions after the fact, summarised over time), so they get their own
-sink. This module never touches :class:`~sailguarding.storage.StorageStrategy` and that seam never
-grows a metric query — the two stay distinct, as the SPEC's architecture section requires.
+separate lifecycle (joined to activities after the fact, summarised over time), so they get their
+own sink. This module never touches :class:`~sailguarding.storage.StorageStrategy` and that seam
+never grows a metric query — the two stay distinct, as the SPEC's architecture section requires.
 
 The read path is where the "never conflate health and efficacy" rule is enforced *by the type*:
 :meth:`MetricsSink.series` **requires** a :class:`~sailguarding.safeguards.Measurement`, so there is
