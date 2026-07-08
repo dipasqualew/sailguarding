@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 import pytest
 
+from sailguarding.domain import Context, EventRecord
 from sailguarding.web import App
 
 
@@ -156,11 +158,56 @@ def test_out_of_range_inputs_are_clamped() -> None:
 
 
 def test_pipeline_classifies_seed_events() -> None:
+    # A bare App() has no event source, so the panel falls back to the demo scenario.
     data = json.loads(App().handle("GET", "/api/pipeline").body)
     events = data["events"]
+    assert data["live"] is False
     outcomes = {e["input"]: (e["outcome"], e["action_id"]) for e in events}
     assert outcomes["src/cart.test.ts"] == ("matched", "write-tests")
     assert outcomes["npm run deploy:staging"] == ("matched", "deploy")
+
+
+def _recorded(tool: str, tool_input: dict[str, object]) -> EventRecord:
+    """A recorded event as the sensor's store would return it, for the injected event source."""
+    return EventRecord(
+        session_id="live",
+        harness_id="claude-code",
+        tool_name=tool,
+        tool_input=tool_input,
+        context=Context(repo="checkout"),
+        timestamp=datetime(2026, 7, 8, 12, 0, tzinfo=UTC),
+    )
+
+
+def test_pipeline_shows_injected_recorded_events_over_the_demo() -> None:
+    # Inject the store the running server wires in: the panel classifies the *real* events.
+    app = App(events_source=lambda: [_recorded("Edit", {"file_path": "src/cart.test.ts"})])
+    data = json.loads(app.handle("GET", "/api/pipeline").body)
+
+    assert data["live"] is True
+    assert data["count"] == 1
+    (row,) = data["events"]
+    assert row["input"] == "src/cart.test.ts"
+    assert (row["outcome"], row["action_id"]) == ("matched", "write-tests")
+
+
+def test_index_page_flags_whether_the_pipeline_is_live_or_demo() -> None:
+    demo = App().handle("GET", "/").body.decode("utf-8")
+    assert "showing the demo scenario" in demo
+
+    app = App(events_source=lambda: [_recorded("Bash", {"command": "npm test"})])
+    live = app.handle("GET", "/").body.decode("utf-8")
+    assert "1 recorded tool call" in live
+
+
+def test_pipeline_is_fail_soft_when_the_event_source_raises() -> None:
+    # A broken store (missing branch, non-git dir, …) must degrade to the demo, not 500 the page.
+    def boom() -> list[EventRecord]:
+        raise RuntimeError("git exploded")
+
+    data = json.loads(App(events_source=boom).handle("GET", "/api/pipeline").body)
+    assert data["live"] is False
+    assert data["events"]  # the demo scenario still renders
 
 
 def test_score_reports_the_two_evidence_series() -> None:

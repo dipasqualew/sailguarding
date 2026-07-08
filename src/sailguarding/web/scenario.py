@@ -526,11 +526,16 @@ _SEED_EVENTS = (
 )
 
 
-def classified_pipeline() -> list[dict[str, object]]:
-    """Run the real selector classifier over the seed events (observe → classify)."""
+def classified_pipeline(events: Iterable[EventRecord] | None = None) -> list[dict[str, object]]:
+    """Run the real selector classifier over ``events`` (observe → classify).
+
+    Defaults to the built-in seed events so the demo still renders before anything is recorded; the
+    running dashboard passes the *real* events it read from the sensor's store, so the panel shows
+    the tool calls this repo actually captured rather than a hardcoded scenario.
+    """
     strategy = SelectorClassificationStrategy(_RULES)
     rows: list[dict[str, object]] = []
-    for event in _SEED_EVENTS:
+    for event in _SEED_EVENTS if events is None else events:
         result = strategy.classify(event)
         rows.append(
             {

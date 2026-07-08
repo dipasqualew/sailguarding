@@ -12,9 +12,10 @@ real ``claude`` CLI or the user's config.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +24,9 @@ Runner = Callable[[Sequence[str]], tuple[int, str]]
 
 # The marker that identifies the repo root: the local marketplace manifest lives there.
 MARKETPLACE_MANIFEST = Path(".claude-plugin") / "marketplace.json"
+
+# An explicit escape hatch: point `sg` straight at a sailguarding checkout, overriding discovery.
+REPO_ENV_VAR = "SAILGUARDING_REPO"
 
 
 @dataclass(frozen=True)
@@ -39,24 +43,47 @@ class PluginRef:
         return f"{self.plugin_name}@{self.marketplace_name}"
 
 
-def find_repo_root(start: Path) -> Path:
-    """Walk up from ``start`` to the repo root (the dir holding the marketplace manifest).
+def candidate_starts(source: Path, env: Mapping[str, str] | None = None) -> list[Path]:
+    """Ordered places to begin the walk to the repo root.
 
-    Because this package is installed *editable*, ``start`` (this file) lives inside the repo, so
-    the walk resolves the same repo the source is edited in.
+    We must not assume the ``cli`` package still lives inside the repo: ``uv tool install ./cli``
+    copies the source into an isolated tool venv, so ``source`` (this file) points *outside* the
+    checkout and the old walk-up failed. The reliable anchors, in priority order:
+
+    1. ``$SAILGUARDING_REPO`` — an explicit checkout the operator names, wins over discovery.
+    2. The current working directory — the operator runs ``sg install`` from their checkout.
+    3. ``source`` — the source file location, which still works for an *editable* install.
     """
-    for candidate in (start, *start.parents):
-        if (candidate / MARKETPLACE_MANIFEST).is_file():
-            return candidate
+    env = os.environ if env is None else env
+    starts: list[Path] = []
+    override = env.get(REPO_ENV_VAR)
+    if override:
+        starts.append(Path(override).expanduser())
+    starts.append(Path.cwd())
+    starts.append(source)
+    return starts
+
+
+def find_repo_root(starts: Path | Iterable[Path]) -> Path:
+    """Walk up from each start (in order) to the repo root — the dir holding the manifest."""
+    candidates = [starts] if isinstance(starts, Path) else list(starts)
+    searched: list[Path] = []
+    for start in candidates:
+        start = start.resolve()
+        searched.append(start)
+        for candidate in (start, *start.parents):
+            if (candidate / MARKETPLACE_MANIFEST).is_file():
+                return candidate
+    tried = ", ".join(str(path) for path in searched)
     raise FileNotFoundError(
-        f"could not locate {MARKETPLACE_MANIFEST} walking up from {start}; "
-        "is the cli package still inside the sailguarding repo?"
+        f"could not locate {MARKETPLACE_MANIFEST} above any of: {tried}. "
+        f"Run `sg` from inside your sailguarding checkout, or set {REPO_ENV_VAR} to its path."
     )
 
 
-def resolve_ref(start: Path) -> PluginRef:
+def resolve_ref(source: Path, env: Mapping[str, str] | None = None) -> PluginRef:
     """Read the local marketplace manifest and derive the plugin reference from it."""
-    repo_root = find_repo_root(start)
+    repo_root = find_repo_root(candidate_starts(source, env))
     manifest = json.loads((repo_root / MARKETPLACE_MANIFEST).read_text())
     marketplace_name = manifest["name"]
     plugins = manifest.get("plugins") or []
@@ -107,6 +134,16 @@ def install(ref: PluginRef, runner: Runner) -> None:
     ensure_marketplace(ref, runner)
     _claude(runner, "install", ref.ref, "--scope", "user")
     _claude(runner, "enable", ref.ref)
+
+
+def update(ref: PluginRef, runner: Runner) -> None:
+    """Refresh the marketplace from its source, then update the plugin to the latest version.
+
+    ``ensure_marketplace`` re-reads the local manifest, and ``claude plugin update`` pulls the new
+    plugin version through it. Both are idempotent, so re-running when already current is a no-op.
+    """
+    ensure_marketplace(ref, runner)
+    _claude(runner, "update", ref.ref)
 
 
 def enable(ref: PluginRef, runner: Runner) -> None:

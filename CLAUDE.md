@@ -19,7 +19,7 @@ to spec**: something the user can see and, ideally, drive.
 Concretely, before marking a task done:
 
 - Build or extend a **visible demo** of the new behaviour. The web dashboard
-  (`python -m sailguarding.web`, see [`src/sailguarding/web/`](src/sailguarding/web/)) is the
+  (`sg serve`, see [`src/sailguarding/web/`](src/sailguarding/web/)) is the
   standing demo surface — most stories should add a panel or interaction to it rather than a
   one-off script.
 - **Show it to the user**, not just describe it. In a remote/web session where the user cannot run

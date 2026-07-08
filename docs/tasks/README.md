@@ -25,4 +25,4 @@ reader should be able to act on one without reconstructing this conversation.
 
 Per the definition of done in [`../../CLAUDE.md`](../../CLAUDE.md), a task is not complete until it is
 **demonstrated** — so tasks 06+ carry a **Demo** section, and most extend the standing demo surface
-(the web dashboard, `python -m sailguarding.web`) rather than a one-off script.
+(the web dashboard, `sg serve`) rather than a one-off script.

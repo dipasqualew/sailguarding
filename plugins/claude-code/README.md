@@ -39,16 +39,24 @@ The plugin installs through the in-repo **local marketplace** (`.claude-plugin/m
 at the repo root) via Claude Code's plugin flow — not by hand-editing settings. Nothing is
 published; it installs straight from this repo.
 
+Once `sg` is on your `PATH` (`uv tool install ./cli`), drive the lifecycle with the operator CLI:
+
 ```bash
-# from the repo root
-./scripts/plugin.sh install     # register the local marketplace, install + enable the plugin
-./scripts/plugin.sh disable     # disable, uninstall, and remove the marketplace (no residue)
-./scripts/plugin.sh status      # show marketplace + plugin state
+sg install     # register the local marketplace, install + enable the plugin
+sg update      # refresh the marketplace and update the plugin to the latest version
+sg disable     # disable, uninstall, and remove the marketplace (no residue)
+sg status      # show marketplace + plugin state
 ```
 
-The hooks invoke the engine as `sailguarding record` / `sailguarding flush` (the console script
-installed with the `sailguarding` package). If the engine isn't on `PATH` as a script, set
-`SAILGUARDING_ENGINE` (e.g. `SAILGUARDING_ENGINE="python -m sailguarding.sensor"`).
+`sg` locates this checkout from the working directory (run it from inside your clone), so no
+editable install is required. If you run it from elsewhere, point it at your clone with
+`SAILGUARDING_REPO=/path/to/sailguarding`. The equivalent `./scripts/plugin.sh {install,disable,status}`
+remains as a `sg`-free fallback.
+
+The hooks invoke the engine as `sg record` / `sg flush` — `sg` is the one operator command on
+`PATH`, and it carries the sensor's hook subcommands. The hook resolves `sg` to an absolute path
+(PATH, then `~/.local/bin`) so Claude Code's GUI/login `PATH` can't hide it. To point at a
+different engine (e.g. in tests), set `SAILGUARDING_ENGINE="python -m sailguarding.sensor"`.
 
 ## Configuration (environment variables)
 
@@ -59,7 +67,7 @@ installed with the `sailguarding` package). If the engine isn't on `PATH` as a s
 | `SAILGUARDING_ENVIRONMENT` | Ambient `environment` context dimension              | (unset)               |
 | `SAILGUARDING_REDACT_KEYS` | Extra comma-separated secret key patterns to redact  | (built-in set)        |
 | `SAILGUARDING_SPOOL_DIR`   | Directory events are staged in before the commit     | `<git-dir>/sailguarding/spool` |
-| `SAILGUARDING_ENGINE`      | Engine command the hooks invoke                      | `sailguarding`        |
+| `SAILGUARDING_ENGINE`      | Engine command the hooks invoke                      | `sg` (resolved on PATH) |
 | `SAILGUARDING_TIMEOUT`     | Seconds to time-box the engine before giving up      | `5`                   |
 
 ## Contract

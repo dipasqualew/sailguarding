@@ -10,12 +10,14 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from sailguarding.web.app import App
+from sailguarding.web.app import App, store_backed_events
 
 
 def make_server(host: str = "127.0.0.1", port: int = 8000) -> ThreadingHTTPServer:
     """Build (but do not start) the demo HTTP server bound to ``host:port``."""
-    app = App()
+    # Wire the live sensor store into the pipeline panel — the running dashboard shows the tool
+    # calls this repo actually recorded, not the hermetic demo an argument-free ``App()`` renders.
+    app = App(events_source=store_backed_events)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:

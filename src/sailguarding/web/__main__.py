@@ -1,6 +1,8 @@
-"""``python -m sailguarding.web`` — launch the demo dashboard.
+"""Launch the demo dashboard.
 
-python -m sailguarding.web [--host HOST] [--port PORT]
+The front door is ``sg serve`` (the one command on PATH). This module is the same server behind it,
+runnable directly as ``python -m sailguarding.web [--host HOST] [--port PORT]`` for tests or when
+the operator CLI isn't installed.
 """
 
 from __future__ import annotations

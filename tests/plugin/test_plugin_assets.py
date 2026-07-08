@@ -100,6 +100,15 @@ def test_hook_script_invokes_the_configurable_engine_and_is_fail_open() -> None:
     assert "exit 0" in body
 
 
+def test_hook_script_defaults_to_resolving_the_sg_command() -> None:
+    body = HOOK_SCRIPT.read_text()
+
+    # `sg` is the one command on PATH; the hook must resolve it itself (Claude Code's GUI/login
+    # PATH may hide the user's bin dir), so it looks it up on PATH and then under ~/.local/bin.
+    assert "command -v sg" in body
+    assert ".local/bin/sg" in body
+
+
 def test_manifest_and_marketplace_agree_on_the_plugin_name() -> None:
     manifest_name = _load(PLUGIN_MANIFEST)["name"]
     marketplace_entry = _load(MARKETPLACE)["plugins"][0]["name"]

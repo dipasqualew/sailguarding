@@ -13,13 +13,53 @@ you move the sliders — not a cosmetic list.
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import parse_qs
 
+from sailguarding.domain import EventRecord
 from sailguarding.measurement import InMemoryMetricsSink
 from sailguarding.scoring import InMemoryDecisionLog, Scorer
 from sailguarding.web import scenario
 from sailguarding.web.page import render_page
+
+# The source of the pipeline panel's events. Injected into :class:`App` so tests drive it with a
+# fixed list and never touch git; the running server wires in :func:`store_backed_events`.
+EventSource = Callable[[], list[EventRecord]]
+
+
+def store_backed_events() -> list[EventRecord]:
+    """Every event the sensor recorded, read from the store the operator config selects.
+
+    This is the honest wire between the sensor and the dashboard: the same
+    :class:`~sailguarding.sensor.config.SensorConfig` the hook resolves picks the store (the
+    ``sailguarding/events`` branch by default), and we scan it. Kept fail-soft — a missing branch,
+    a non-git directory, any storage error yields no events (the panel then shows the demo
+    scenario) rather than breaking the page.
+    """
+    from dataclasses import replace
+
+    from sailguarding.sensor.cli import ENV_PROJECT_DIR
+    from sailguarding.sensor.config import (
+        SensorConfig,
+        build_commit_storage,
+        resolve_store_root,
+    )
+    from sailguarding.sensor.pluginconfig import load_from_env
+    from sailguarding.storage.git import SubprocessGitRunner
+
+    try:
+        env = os.environ
+        repo = Path(env.get(ENV_PROJECT_DIR) or Path.cwd())
+        git = SubprocessGitRunner(repo)
+        config = SensorConfig.resolve(repo, env, load_from_env(env))
+        config = replace(config, store_path=resolve_store_root(git, repo, config.store_path))
+        return build_commit_storage(config).scan()
+    except Exception:
+        return []
+
 
 # Input ranges the sliders move within; also used to clamp hand-crafted API calls.
 FLAKINESS_MAX = 0.05  # 5%
@@ -43,11 +83,15 @@ class App:
     score runs through a :class:`Scorer` into the one shared log, so the audit trail is continuous.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, events_source: EventSource | None = None) -> None:
         self._log = InMemoryDecisionLog()
         # The metrics sink (task 08) — separate from the decision log — accumulates the safeguard's
         # evidence across the session, so ingesting a point moves the derived signal over time.
         self._metrics = scenario.seed_metrics()
+        # Where the pipeline panel's events come from. Defaults to *none* so a bare ``App()`` is a
+        # hermetic demo (the seed scenario, no I/O); the server injects :func:`store_backed_events`
+        # to show the tool calls this repo actually recorded.
+        self._events_source: EventSource = events_source or (lambda: [])
 
     @property
     def log(self) -> InMemoryDecisionLog:
@@ -70,7 +114,7 @@ class App:
         if path == "/api/ingest":
             return _json(self._ingest(params))
         if path == "/api/pipeline":
-            return _json({"events": scenario.classified_pipeline()})
+            return _json(self._pipeline())
         if path == "/api/decisions":
             return _json({"decisions": self._recent_decisions()})
         return _json({"error": f"not found: {path}"}, status=404)
@@ -81,15 +125,30 @@ class App:
         params = params or {}
         initial = self._score(params)
         initial["recent"] = self._recent_decisions()  # seed the log panel with real history
+        events = self._read_events()
         html = render_page(
             initial_score=initial,
-            pipeline=scenario.classified_pipeline(),
+            pipeline=scenario.classified_pipeline(events or None),
+            pipeline_source=_pipeline_source(live=bool(events), count=len(events)),
             safeguards=scenario.safeguard_panel(_disabled(params)),
             flakiness_max=FLAKINESS_MAX,
             impact_max=IMPACT_MAX,
             override_remaining=scenario.LEAF_OVERRIDE_REMAINING,
         )
         return Response(200, "text/html; charset=utf-8", html.encode("utf-8"))
+
+    def _pipeline(self) -> dict[str, object]:
+        # Read the sensor's recorded events and classify them through the real selector engine.
+        # With nothing recorded yet we fall back to the seed scenario so the panel is never blank.
+        events = self._read_events()
+        rows = scenario.classified_pipeline(events or None)
+        return {"events": rows, "live": bool(events), "count": len(events)}
+
+    def _read_events(self) -> list[EventRecord]:
+        try:
+            return list(self._events_source())
+        except Exception:
+            return []
 
     def _ingest(self, params: dict[str, list[str]]) -> dict[str, object]:
         # Append one measurement to the live sink, then re-score: the derived signal (and, for a
@@ -180,6 +239,14 @@ def _param_str(params: dict[str, list[str]], name: str, default: str = "") -> st
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def _pipeline_source(*, live: bool, count: int) -> str:
+    """The panel's provenance line: how many real events, or that it is the demo fallback."""
+    if live:
+        calls = "call" if count == 1 else "calls"
+        return f"Showing {count} recorded tool {calls} from the sensor's event store."
+    return "No events recorded yet — showing the demo scenario. Run tools with the plugin enabled."
 
 
 def _json(payload: object, *, status: int = 200) -> Response:

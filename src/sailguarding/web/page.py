@@ -12,6 +12,7 @@ braces need no escaping.
 from __future__ import annotations
 
 import json
+from html import escape
 from typing import Any
 
 _TEMPLATE = """<!doctype html>
@@ -50,6 +51,7 @@ header p { margin: 0; color: var(--muted); }
 .panel h2 { margin: 0 0 2px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--muted); font-weight: 600; }
 .panel .sub { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.panel .sub .src { display: inline-block; margin-left: 4px; font-style: italic; opacity: .85; }
 
 .floatbox { display: flex; align-items: baseline; gap: 14px; margin: 6px 0 4px; }
 .floatbox .num { font-size: 54px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -154,7 +156,8 @@ footer code { color: var(--ink); }
 
   <div class="panel" style="margin-top:24px">
     <h2>Observe → classify <span class="tag">tasks 01–04</span></h2>
-    <p class="sub">Raw tool events resolved to actions by the deterministic selector engine.</p>
+    <p class="sub">Raw tool events resolved to actions by the deterministic selector engine.
+      <span class="src">__PIPELINE_SOURCE__</span></p>
     <table id="pipeline"><thead><tr><th>Tool</th><th>Input</th><th>Outcome</th><th>Action</th></tr></thead>
       <tbody></tbody></table>
   </div>
@@ -456,6 +459,7 @@ def render_page(
     *,
     initial_score: dict[str, Any],
     pipeline: list[dict[str, Any]],
+    pipeline_source: str,
     safeguards: list[dict[str, Any]],
     flakiness_max: float,
     impact_max: float,
@@ -465,6 +469,7 @@ def render_page(
     subs = {
         "__INITIAL_JSON__": json.dumps(initial_score),
         "__PIPELINE_JSON__": json.dumps(pipeline),
+        "__PIPELINE_SOURCE__": escape(pipeline_source),
         "__SAFEGUARDS_JSON__": json.dumps(safeguards),
         "__FLAKINESS_MAX__": json.dumps(flakiness_max),
         "__IMPACT_MAX__": _trim(impact_max),

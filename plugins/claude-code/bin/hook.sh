@@ -17,10 +17,22 @@ set -u
 
 subcommand="${1:?usage: hook.sh <record|flush>}"
 
-# The engine command. Defaults to the `sailguarding` console script on PATH; override with
-# SAILGUARDING_ENGINE (e.g. "python -m sailguarding.sensor") when it isn't installed as a
-# script. Left unquoted below on purpose so a multi-word command word-splits into argv.
-engine="${SAILGUARDING_ENGINE:-sailguarding}"
+# The engine command. `sg` is the one command the operator installs on PATH, and it carries the
+# sensor's `record`/`flush` subcommands — so that is what we shell into. Override with
+# SAILGUARDING_ENGINE (e.g. "python -m sailguarding.sensor") when `sg` isn't installed as a script
+# (tests do this). Left unquoted below on purpose so a multi-word command word-splits into argv.
+#
+# Claude Code launches hooks with a GUI/login PATH that may not include the user's bin dir, so we
+# resolve `sg` to an absolute path — trying PATH first, then the conventional ~/.local/bin — rather
+# than trusting it to be found. No engine resolvable is itself fail-open: do nothing, exit 0.
+engine="${SAILGUARDING_ENGINE:-}"
+if [ -z "$engine" ]; then
+  engine="$(command -v sg 2>/dev/null || true)"
+  if [ -z "$engine" ] && [ -x "$HOME/.local/bin/sg" ]; then
+    engine="$HOME/.local/bin/sg"
+  fi
+fi
+[ -z "$engine" ] && exit 0
 
 # Time-box the engine so a slow write can never stall the agent. `timeout` isn't guaranteed to
 # exist everywhere (it's `gtimeout` on some systems), so fall back to running the engine directly.

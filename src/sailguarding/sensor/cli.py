@@ -16,8 +16,8 @@ always exits ``0`` and never writes to stdout, which Claude Code reads as "no de
 normally". (The actuator role of the pre-tool-use hook will change that posture *deliberately*,
 later; the sensor must not.)
 
-Invoke as ``sailguarding record`` / ``sailguarding flush`` (console script) or
-``python -m sailguarding.sensor <command>``.
+The plugin hook shells into this via ``sg record`` / ``sg flush`` (the operator CLI is the only
+command on PATH). It is also runnable directly as ``python -m sailguarding.sensor <command>``.
 """
 
 from __future__ import annotations
