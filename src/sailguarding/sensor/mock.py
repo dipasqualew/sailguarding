@@ -32,6 +32,7 @@ from typing import Any
 
 from sailguarding.sensor.cli import ENV_PROJECT_DIR, main
 from sailguarding.sensor.payload import PRE_TOOL_USE, SESSION_END, STOP
+from sailguarding.sensor.pluginconfig import PluginConfig
 from sailguarding.sensor.spool import SpoolStorage
 from sailguarding.storage import InMemoryStorage, StorageStrategy
 from sailguarding.storage.git import GitResult, GitRunner
@@ -168,6 +169,7 @@ class MockClaudeCode:
             env=dict(env) if env is not None else self.build_env(),
             storage_factory=lambda _config: sink,
             git_factory=(lambda _path: git) if git is not None else _default_git_factory,
+            config_factory=lambda _env: PluginConfig(),
             clock=clock,
         )
 
@@ -193,6 +195,7 @@ class MockClaudeCode:
             spool_factory=lambda _config: spool,
             branch_factory=lambda _config: branch,
             git_factory=(lambda _path: git) if git is not None else _default_git_factory,
+            config_factory=lambda _env: PluginConfig(),
         )
 
 

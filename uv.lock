@@ -59,10 +59,14 @@ version = "0.0.1"
 source = { editable = "cli" }
 dependencies = [
     { name = "click" },
+    { name = "sailguarding" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "click", specifier = ">=8.1" }]
+requires-dist = [
+    { name = "click", specifier = ">=8.1" },
+    { name = "sailguarding", editable = "." },
+]
 
 [[package]]
 name = "click"

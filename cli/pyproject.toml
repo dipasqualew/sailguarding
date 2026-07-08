@@ -5,7 +5,11 @@ description = "sg — the sailguarding operator CLI: install/manage the Claude C
 requires-python = ">=3.11"
 # This package is deliberately OUTSIDE the engine's zero-dependency invariant: the `sailguarding`
 # package stays stdlib-only (dependencies = []), while this thin operator CLI is free to use Click.
-dependencies = ["click>=8.1"]
+# It depends on the engine so `sg config` and the sensor share one config schema (no drift).
+dependencies = ["click>=8.1", "sailguarding"]
+
+[tool.uv.sources]
+sailguarding = { workspace = true }
 
 [project.scripts]
 # Installed on PATH as `sg` (via `uv tool install --editable ./cli`).

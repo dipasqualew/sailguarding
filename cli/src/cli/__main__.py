@@ -10,6 +10,7 @@ from pathlib import Path
 import click
 
 from cli import plugin
+from cli.config import config
 from cli.plugin import PluginRef, require_claude, resolve_ref, subprocess_runner
 
 
@@ -60,6 +61,9 @@ def status() -> None:
     require_claude()
     ref = _ref()
     click.echo(plugin.status(ref, subprocess_runner))
+
+
+sg.add_command(config)
 
 
 if __name__ == "__main__":

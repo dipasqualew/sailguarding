@@ -69,6 +69,9 @@ def _run_hook(
         "CLAUDE_PLUGIN_ROOT": str(HOOK_SCRIPT.parent.parent),
         "CLAUDE_PROJECT_DIR": str(cwd),
         "SAILGUARDING_ENGINE": engine,
+        # Pin the operator config to a path inside the temp repo so the sensor never reads the
+        # developer's real ~/.config file — this test asserts the default (branch) store.
+        "SAILGUARDING_CONFIG": str(cwd / "sg-config.json"),
         # Keep the module importable in the subprocess.
         "PYTHONPATH": str(REPO_ROOT / "src"),
     }

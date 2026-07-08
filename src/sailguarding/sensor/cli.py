@@ -34,11 +34,13 @@ from typing import BinaryIO
 from sailguarding.domain import EventRecord
 from sailguarding.sensor.config import (
     SensorConfig,
-    build_branch_storage,
+    build_commit_storage,
     build_spool_storage,
+    resolve_store_root,
 )
 from sailguarding.sensor.context import GitContextResolver
 from sailguarding.sensor.payload import parse_payload, parse_session_payload
+from sailguarding.sensor.pluginconfig import PluginConfig, load_from_env
 from sailguarding.sensor.recorder import record_event
 from sailguarding.sensor.redaction import SecretKeyRedactor
 from sailguarding.sensor.spool import SpoolStorage, resolve_spool_root
@@ -60,15 +62,18 @@ def main(
     env: Mapping[str, str] | None = None,
     storage_factory: Callable[[SensorConfig], StorageStrategy] = build_spool_storage,
     spool_factory: Callable[[SensorConfig], SpoolStorage] = build_spool_storage,
-    branch_factory: Callable[[SensorConfig], StorageStrategy] = build_branch_storage,
+    branch_factory: Callable[[SensorConfig], StorageStrategy] = build_commit_storage,
     git_factory: Callable[[Path], GitRunner] = SubprocessGitRunner,
+    config_factory: Callable[[Mapping[str, str]], PluginConfig] = load_from_env,
     clock: Callable[[], datetime] | None = None,
 ) -> int:
     """Run one hook command from stdin. Always returns ``0`` (fail-open).
 
     ``record`` stages via ``storage_factory`` (the spool by default). ``flush`` drains
-    ``spool_factory`` and commits through ``branch_factory``. All factories, plus ``git_factory``
-    and ``clock``, are injectable so the deterministic mock can drive both paths in-process.
+    ``spool_factory`` and commits through ``branch_factory`` (the store the operator config selects,
+    by default). ``config_factory`` loads that operator config file. All factories, plus
+    ``git_factory`` and ``clock``, are injectable so the deterministic mock can drive both paths
+    in-process with no config file, no git and no real store.
     """
     argv = list(sys.argv[1:] if argv is None else argv)
     env = os.environ if env is None else env
@@ -78,9 +83,9 @@ def main(
 
     try:
         if command == RECORD:
-            _record(stream, env, storage_factory, git_factory, clock)
+            _record(stream, env, storage_factory, git_factory, config_factory, clock)
         elif command == FLUSH:
-            _flush(stream, env, spool_factory, branch_factory, git_factory)
+            _flush(stream, env, spool_factory, branch_factory, git_factory, config_factory)
         else:
             print(f"sailguarding sensor: unknown command {command!r}", file=sys.stderr)
     except Exception as exc:  # a sensor must never break the tool call — catch everything.
@@ -95,11 +100,12 @@ def _record(
     env: Mapping[str, str],
     storage_factory: Callable[[SensorConfig], StorageStrategy],
     git_factory: Callable[[Path], GitRunner],
+    config_factory: Callable[[Mapping[str, str]], PluginConfig],
     clock: Callable[[], datetime] | None,
 ) -> EventRecord:
     payload = parse_payload(json.loads(stream.read()))
 
-    git, config = _resolve(env, payload.cwd, git_factory)
+    git, config = _resolve(env, payload.cwd, git_factory, config_factory)
     resolver = GitContextResolver(
         git_factory=lambda _path: git,
         team=config.team,
@@ -124,10 +130,11 @@ def _flush(
     spool_factory: Callable[[SensorConfig], SpoolStorage],
     branch_factory: Callable[[SensorConfig], StorageStrategy],
     git_factory: Callable[[Path], GitRunner],
+    config_factory: Callable[[Mapping[str, str]], PluginConfig],
 ) -> None:
     payload = parse_session_payload(json.loads(stream.read()))
 
-    _git, config = _resolve(env, payload.cwd, git_factory)
+    _git, config = _resolve(env, payload.cwd, git_factory, config_factory)
     spool = spool_factory(config)
     branch = branch_factory(config)
 
@@ -143,10 +150,19 @@ def _resolve(
     env: Mapping[str, str],
     cwd: str,
     git_factory: Callable[[Path], GitRunner],
+    config_factory: Callable[[Mapping[str, str]], PluginConfig],
 ) -> tuple[GitRunner, SensorConfig]:
-    """Build the git runner and the fully-resolved config (including the spool root)."""
+    """Build the git runner and the fully-resolved config.
+
+    The operator config file (via ``config_factory``) is layered under the environment, then the
+    git-derived roots — the spool, and the filesystem store's directory — are resolved onto it.
+    """
     repo_path = Path(env.get(ENV_PROJECT_DIR) or cwd)
     git = git_factory(repo_path)
-    config = SensorConfig.from_env(repo_path, env)
-    config = replace(config, spool_root=resolve_spool_root(git, repo_path, env))
+    config = SensorConfig.resolve(repo_path, env, config_factory(env))
+    config = replace(
+        config,
+        spool_root=resolve_spool_root(git, repo_path, env),
+        store_path=resolve_store_root(git, repo_path, config.store_path),
+    )
     return git, config
