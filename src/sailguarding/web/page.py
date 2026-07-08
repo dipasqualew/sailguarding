@@ -98,11 +98,17 @@ input[type=range] { width: 100%; accent-color: var(--accent); }
   padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; }
 .ingest button:hover { filter: brightness(1.07); }
 
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); }
+.table-scroll { overflow-x: auto; }
+table { width: 100%; min-width: 520px; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line);
+  vertical-align: top; overflow-wrap: anywhere; }
 th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; }
 td code { font-size: 12px; color: var(--ink); }
-.pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); }
+#pipeline th:nth-child(1), #pipeline td:nth-child(1) { width: 11%; }
+#pipeline th:nth-child(2), #pipeline td:nth-child(2) { width: 55%; }
+#pipeline th:nth-child(3), #pipeline td:nth-child(3) { width: 19%; }
+#pipeline th:nth-child(4), #pipeline td:nth-child(4) { width: 15%; }
+.pill { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); white-space: nowrap; }
 .pill.matched { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
 .pill.unmatched { color: var(--muted); }
 .pill.ambiguous { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent); }
@@ -158,8 +164,10 @@ footer code { color: var(--ink); }
     <h2>Observe → classify <span class="tag">tasks 01–04</span></h2>
     <p class="sub">Raw tool events resolved to actions by the deterministic selector engine.
       <span class="src">__PIPELINE_SOURCE__</span></p>
-    <table id="pipeline"><thead><tr><th>Tool</th><th>Input</th><th>Outcome</th><th>Action</th></tr></thead>
-      <tbody></tbody></table>
+    <div class="table-scroll">
+      <table id="pipeline"><thead><tr><th>Tool</th><th>Input</th><th>Outcome</th><th>Action</th></tr></thead>
+        <tbody></tbody></table>
+    </div>
   </div>
 
   <div class="panel" style="margin-top:20px">
