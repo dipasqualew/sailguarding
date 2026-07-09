@@ -24,6 +24,7 @@ than earn it with a track record. See the SPEC's *lifecycle* and *capability too
 | 10 | [The evidence ingestion API](10-evidence-ingestion-api.md) | 09 | todo |
 | 11 | [Capability tools & requested safeguards](11-capability-tools-and-requested-safeguards.md) | 04, 06, 07, 09 | todo |
 | 12 | [Dashboard: requested → attested → holding → expired](12-dashboard-requested-attested-holding-expired.md) | 09, 10, 11 | todo |
+| 13 | [Activity models: a workspace of scoped, importable models](13-activity-models.md) | 06, 07 | done |
 
 Each task lists its own scope, non-goals, and acceptance criteria. Keep tasks self-contained: a
 reader should be able to act on one without reconstructing this conversation.

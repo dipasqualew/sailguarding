@@ -10,9 +10,14 @@ from sailguarding.model import (
     ActivityModel,
     ActivityModelStore,
     FileActivityModelStore,
+    FileWorkspaceStore,
     InMemoryActivityModelStore,
+    InMemoryWorkspaceStore,
+    Workspace,
+    WorkspaceStore,
 )
 from sailguarding.safeguards import Measurement, SafeguardKind
+from sailguarding.web import scenario
 
 
 def _model() -> ActivityModel:
@@ -59,3 +64,52 @@ def test_file_store_writes_canonical_json(tmp_path: Path) -> None:
     model = _model()
     FileActivityModelStore(path).save(model)
     assert path.read_text(encoding="utf-8") == model.to_json()
+
+
+# -- WorkspaceStore ---------------------------------------------------------------------------
+
+
+def _workspace() -> Workspace:
+    """A real, multi-model workspace, built through the scenario's own transforms."""
+    return scenario.seed_workspace()
+
+
+@pytest.fixture(params=["memory", "file"])
+def workspace_store(request: pytest.FixtureRequest, tmp_path: Path) -> WorkspaceStore:
+    """Both workspace store implementations, exercised through the shared Protocol contract."""
+    if request.param == "memory":
+        return InMemoryWorkspaceStore()
+    return FileWorkspaceStore(tmp_path / "workspace.json")
+
+
+def test_workspace_load_before_save_is_none(workspace_store: WorkspaceStore) -> None:
+    assert workspace_store.load() is None
+
+
+def test_workspace_save_then_load_round_trips_equal(workspace_store: WorkspaceStore) -> None:
+    workspace = _workspace()
+    workspace_store.save(workspace)
+    assert workspace_store.load() == workspace
+
+
+def test_workspace_save_replaces_the_previous(workspace_store: WorkspaceStore) -> None:
+    workspace_store.save(Workspace.empty())
+    workspace = _workspace()
+    workspace_store.save(workspace)
+    assert workspace_store.load() == workspace
+
+
+def test_both_workspace_stores_satisfy_the_protocol() -> None:
+    assert isinstance(InMemoryWorkspaceStore(), WorkspaceStore)
+    assert isinstance(FileWorkspaceStore("unused.json"), WorkspaceStore)
+
+
+def test_file_workspace_store_writes_canonical_json(tmp_path: Path) -> None:
+    path = tmp_path / "workspace.json"
+    workspace = _workspace()
+    FileWorkspaceStore(path).save(workspace)
+    assert path.read_text(encoding="utf-8") == workspace.to_json()
+
+
+def test_file_workspace_store_load_returns_none_when_file_absent(tmp_path: Path) -> None:
+    assert FileWorkspaceStore(tmp_path / "workspace.json").load() is None

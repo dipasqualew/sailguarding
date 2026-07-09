@@ -9,15 +9,15 @@ from http.client import HTTPConnection
 
 import pytest
 
-from sailguarding.model import InMemoryActivityModelStore
+from sailguarding.model import InMemoryWorkspaceStore
 from sailguarding.web.app import App
 from sailguarding.web.server import make_server
 
 
 @pytest.fixture
 def base_url() -> Iterator[str]:
-    # Inject an in-memory-backed app so the smoke test never writes a model file into the repo.
-    server = make_server("127.0.0.1", 0, App(InMemoryActivityModelStore()))  # port 0 → free port
+    # Inject an in-memory-backed app so the smoke test never writes a workspace file into the repo.
+    server = make_server("127.0.0.1", 0, App(InMemoryWorkspaceStore()))  # port 0 → free port
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]

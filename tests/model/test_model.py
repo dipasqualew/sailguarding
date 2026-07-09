@@ -7,7 +7,14 @@ from __future__ import annotations
 
 import pytest
 
-from sailguarding.model import MODEL_SCHEMA_VERSION, ROOT_ID, ActivityModel, Risk
+from sailguarding.model import (
+    DEFAULT_MODEL_ID,
+    MODEL_SCHEMA_VERSION,
+    ROOT_ID,
+    ActivityModel,
+    ContextScope,
+    Risk,
+)
 from sailguarding.safeguards import Measurement, Safeguard, SafeguardKind
 
 
@@ -287,6 +294,177 @@ def test_serialised_form_is_versioned() -> None:
 
 def test_rejects_unknown_schema_version() -> None:
     data = ActivityModel.empty().to_dict()
+    data["schema_version"] = 999
+    with pytest.raises(ValueError, match="unsupported ActivityModel schema_version"):
+        ActivityModel.from_dict(data)
+
+
+# -- identity & applicability -----------------------------------------------------------------
+
+
+def test_empty_defaults_to_the_default_model_id_and_no_name() -> None:
+    model = ActivityModel.empty()
+    assert model.id == DEFAULT_MODEL_ID == "model"
+    assert model.name == ""
+    assert model.applies_when == ContextScope.empty()
+
+
+def test_empty_sets_the_given_id_and_name() -> None:
+    model = ActivityModel.empty(model_id="sales", name="Sales")
+    assert model.id == "sales"
+    assert model.name == "Sales"
+
+
+def test_set_name_returns_a_new_model_with_the_name() -> None:
+    model = ActivityModel.empty(model_id="sales")
+    named = model.set_name("Sales")
+    assert named.name == "Sales"
+    assert named.id == "sales"  # id unchanged
+    assert model.name == ""  # receiver untouched
+
+
+def test_set_applies_when_replaces_the_scope() -> None:
+    scope = ContextScope.empty().set_dimension("repo", ("checkout", "billing"))
+    model = ActivityModel.empty().set_applies_when(scope)
+    assert model.applies_when == scope
+
+
+def test_round_trips_with_a_non_empty_applies_when() -> None:
+    scope = ContextScope.empty().set_dimension("repo", ("checkout", "billing"))
+    model, _ = _populated()
+    model = model.set_name("Product").set_applies_when(scope)
+    reloaded = ActivityModel.from_dict(model.to_dict())
+    assert reloaded == model
+    assert reloaded.applies_when == scope
+    assert reloaded.name == "Product"
+
+
+# -- import (copy from another model) ---------------------------------------------------------
+
+
+def test_import_risk_appends_a_new_risk() -> None:
+    model = ActivityModel.empty()
+    risk = Risk(id="data-loss", label="Data loss", description="destroying records")
+    imported, risk_id = model.import_risk(risk)
+    assert risk_id == "data-loss"
+    assert imported.find_risk("data-loss") == risk
+    assert model.risks == ()  # receiver untouched
+
+
+def test_import_risk_dedupes_by_id() -> None:
+    model, existing_id = ActivityModel.empty().add_risk("Data loss")
+    incoming = Risk(id=existing_id, label="Different label")
+    imported, risk_id = model.import_risk(incoming)
+    assert risk_id == existing_id
+    assert imported is model  # unchanged; the existing risk is reused
+    assert model.find_risk(existing_id).label == "Data loss"  # type: ignore[union-attr]
+
+
+def test_import_safeguard_appends_a_new_safeguard() -> None:
+    model = ActivityModel.empty()
+    safeguard = Safeguard(
+        id="peer-review",
+        label="Peer review",
+        metric="",
+        kind=SafeguardKind.HUMAN_DEPENDENT,
+        measures=Measurement.EFFICACY,
+    )
+    imported, sg_id = model.import_safeguard(safeguard)
+    assert sg_id == "peer-review"
+    assert imported.find_safeguard("peer-review") == safeguard
+
+
+def test_import_safeguard_dedupes_by_id() -> None:
+    model, existing_id = _add_review(ActivityModel.empty())
+    incoming = Safeguard(
+        id=existing_id,
+        label="Different label",
+        metric="",
+        kind=SafeguardKind.STRUCTURAL,
+        measures=Measurement.HEALTH,
+    )
+    imported, sg_id = model.import_safeguard(incoming)
+    assert sg_id == existing_id
+    assert imported is model  # unchanged; the existing safeguard is reused
+
+
+def _source_with_governed_subtree() -> tuple[ActivityModel, str]:
+    """A source model whose "Test software" activity faces a risk mitigated by a safeguard."""
+    source, _ = ActivityModel.empty().add_activity(None, "Write software")
+    source, test = source.add_activity(None, "Test software")
+    source, risk = source.add_risk("Break capabilities")
+    source, sg = _add_review(source)
+    source = source.attach_risk(test, risk).add_mitigation(test, risk, sg)
+    return source, test
+
+
+def test_import_activity_gives_fresh_ids_and_reslugs_on_collision() -> None:
+    source, test = _source_with_governed_subtree()
+    # The target already has a "test-software" activity, so the import re-slugs.
+    target, _ = ActivityModel.empty().add_activity(None, "Test software")
+    imported, new_id = target.import_activity(source, test)
+    assert new_id == "test-software-2"
+    assert imported.tree.find("test-software-2") is not None
+
+
+def test_import_activity_brings_referenced_governance_and_remapped_edges() -> None:
+    source, test = _source_with_governed_subtree()
+    target = ActivityModel.empty()
+    imported, new_id = target.import_activity(source, test)
+    # The referenced risk & safeguard came along, and the edges point at the fresh activity id.
+    assert imported.find_risk("break-capabilities") is not None
+    assert imported.find_safeguard("peer-review") is not None
+    assert imported.risks_for(new_id) != ()
+    assert imported.safeguards_for(new_id, "break-capabilities") != ()
+
+
+def test_import_activity_leaves_the_source_untouched() -> None:
+    source, test = _source_with_governed_subtree()
+    before = source.to_json()
+    ActivityModel.empty().import_activity(source, test)
+    assert source.to_json() == before
+
+
+def test_import_activity_missing_activity_raises_keyerror() -> None:
+    source = ActivityModel.empty()
+    with pytest.raises(KeyError, match="nope"):
+        ActivityModel.empty().import_activity(source, "nope")
+
+
+def test_import_activity_missing_parent_raises_keyerror() -> None:
+    source, test = _source_with_governed_subtree()
+    with pytest.raises(KeyError, match="nope"):
+        ActivityModel.empty().import_activity(source, test, parent_id="nope")
+
+
+# -- v1 back-compat read ----------------------------------------------------------------------
+
+
+def test_reads_a_v1_record_without_identity_and_re_emits_at_v2() -> None:
+    model, _ = _populated()
+    data = model.to_dict()
+    # Strip the v2-only fields and stamp it as a legacy v1 record.
+    data["schema_version"] = 1
+    del data["id"]
+    del data["name"]
+    del data["applies_when"]
+
+    loaded = ActivityModel.from_dict(data)
+
+    assert loaded.id == DEFAULT_MODEL_ID
+    assert loaded.name == ""
+    assert loaded.applies_when == ContextScope.empty()
+    # A record is always re-emitted at the current version.
+    assert loaded.schema_version == MODEL_SCHEMA_VERSION == 2
+    assert loaded.to_dict()["schema_version"] == 2
+
+
+def test_from_dict_accepts_versions_1_and_2_but_rejects_others() -> None:
+    data = ActivityModel.empty().to_dict()
+    data["schema_version"] = 1
+    assert ActivityModel.from_dict(data).schema_version == MODEL_SCHEMA_VERSION
+    data["schema_version"] = 2
+    assert ActivityModel.from_dict(data).schema_version == MODEL_SCHEMA_VERSION
     data["schema_version"] = 999
     with pytest.raises(ValueError, match="unsupported ActivityModel schema_version"):
         ActivityModel.from_dict(data)

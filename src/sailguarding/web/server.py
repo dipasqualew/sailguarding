@@ -10,7 +10,7 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
-from sailguarding.web.app import App, Response, store_backed_model_store
+from sailguarding.web.app import App, Response, store_backed_workspace_store
 
 
 def make_server(
@@ -23,7 +23,7 @@ def make_server(
         operator-configured root so edits survive a restart, falling back to in-memory when there is
         no writable store (a non-git dir, a permissions error) so the server always boots.
     """
-    served = app or App(store_backed_model_store())
+    served = app or App(store_backed_workspace_store())
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:

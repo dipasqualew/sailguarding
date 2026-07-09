@@ -163,6 +163,56 @@ select { flex: 1; min-width: 140px; }
   border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; line-height: 18px; white-space: nowrap; }
 .usedby.shared { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .lib-empty { color: var(--muted); font-size: 13px; }
+
+/* --- Model switcher --------------------------------------------------------------------------- */
+.models { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 18px; }
+.model-pill { font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel); color: var(--muted); padding: 6px 13px;
+  display: inline-flex; align-items: center; gap: 7px; }
+.model-pill:hover { color: var(--ink); border-color: var(--accent); }
+.model-pill.active { background: var(--sel); color: var(--ink);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.model-pill .model-count { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--muted);
+  background: var(--chip); border-radius: 999px; padding: 0 6px; line-height: 16px; }
+.model-pill.add { border-style: dashed; }
+.model-actions { display: inline-flex; gap: 6px; margin-left: 4px; }
+
+/* --- "Applies when" scope strip --------------------------------------------------------------- */
+.scope-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; margin-top: 12px;
+  padding: 11px 13px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+.scope-lead { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+  font-weight: 600; margin-right: 3px; }
+.scope-any { color: var(--muted); font-size: 13px; font-style: italic; }
+.scope-dim { display: inline-flex; align-items: center; gap: 5px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 10px; padding: 4px 6px 4px 9px; }
+.scope-name { font-size: 12px; font-weight: 600; color: var(--accent); }
+.scope-name::after { content: "∈"; color: var(--muted); margin-left: 5px; font-weight: 400; }
+.scope-chip { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; background: var(--chip);
+  border: 1px solid var(--line); border-radius: 999px; padding: 1px 5px 1px 9px; }
+.scope-chip.any { color: var(--muted); font-style: italic; padding-right: 9px; }
+.chip-x { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 13px;
+  line-height: 1; padding: 0 2px; border-radius: 4px; }
+.chip-x:hover { color: var(--bad); }
+.scope-add { font: inherit; font-size: 12px; background: var(--bg); color: var(--ink);
+  border: 1px dashed var(--line); border-radius: 8px; padding: 3px 7px; width: 84px; min-width: 0; flex: none; }
+.scope-add:focus { border-color: var(--accent); outline: none; }
+
+/* --- Import modal ----------------------------------------------------------------------------- */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex;
+  align-items: center; justify-content: center; z-index: 60; padding: 20px; }
+.modal-backdrop.hidden { display: none; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px;
+  width: 100%; max-width: 520px; box-shadow: 0 24px 60px rgba(0,0,0,.4); }
+.modal h3 { margin: 0 0 4px; font-size: 17px; }
+.modal .sub { margin: 0 0 16px; color: var(--muted); font-size: 13px; }
+.modal .row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+.modal .row > label { font-size: 12px; color: var(--muted); min-width: 74px; }
+.modal select { flex: 1; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 6px; }
+.import-preview { font-size: 12px; color: var(--muted); background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
+.import-preview b { color: var(--ink); }
+
 footer { margin-top: 30px; color: var(--muted); font-size: 12px; }
 footer code { color: var(--ink); }
 </style>
@@ -171,13 +221,16 @@ footer code { color: var(--ink); }
 <div class="wrap">
   <header>
     <div>
-      <h1>sailguarding <span class="tag">activity model</span></h1>
+      <h1>sailguarding <span class="tag">activity models</span></h1>
       <p>Model the work you hand to agents as a tree of activities, the risks each faces, and the
-        safeguards that mitigate them. Risks and safeguards live in shared libraries — reuse one and
-        watch its coverage count climb.</p>
+        safeguards that mitigate them. Keep a separate model per domain — switch between them, scope
+        each to where it applies, and import activities, risks, or safeguards from one into another.</p>
     </div>
     <button class="theme-toggle" id="theme-toggle">Theme</button>
   </header>
+
+  <div class="models" id="models"></div>
+  <div class="scope-strip" id="scope-strip"></div>
 
   <div class="grid">
     <section class="panel">
@@ -186,6 +239,7 @@ footer code { color: var(--ink); }
       <div class="tree" id="tree"></div>
       <div class="tree-add">
         <button class="btn ghost small" id="add-root">＋ Add root activity</button>
+        <button class="btn ghost small" id="import-open">⤵ Import from another model…</button>
       </div>
     </section>
 
@@ -215,12 +269,14 @@ footer code { color: var(--ink); }
   </footer>
 </div>
 
+<div class="modal-backdrop hidden" id="import-modal"></div>
 <div class="toast" id="toast"></div>
 
 <script>
 "use strict";
 let MODEL = window.__MODEL__ = __MODEL_JSON__;
 let selectedId = null;
+let activeId = MODEL.active_id;     // which model is showing; a change resets tree/selection state
 const collapsed = new Set();       // activity ids whose children are hidden
 const openRisks = new Set();       // "activityId::riskId" rows expanded in the detail pane
 
@@ -595,8 +651,176 @@ function renderLibraries() {
     : '<div class="lib-empty">No safeguards yet — assign one to a risk.</div>';
 }
 
+// --- Model switcher. ---------------------------------------------------------------------------
+const activeModelMeta = () => MODEL.models.find((m) => m.id === MODEL.active_id) || null;
+
+function renderModels() {
+  const bar = $("models");
+  const pills = MODEL.models.map((m) =>
+    '<button class="model-pill' + (m.id === MODEL.active_id ? " active" : "") + '" data-model="' + m.id + '">' +
+      esc(m.name || "(unnamed model)") +
+      '<span class="model-count" title="activities">' + m.activity_count + "</span>" +
+    "</button>").join("");
+  bar.innerHTML = pills +
+    '<button class="model-pill add" id="model-add">＋ New model</button>' +
+    '<span class="model-actions">' +
+      '<button class="btn small ghost" id="model-rename">Rename</button>' +
+      '<button class="btn small ghost" id="model-delete">Delete</button>' +
+    "</span>";
+  MODEL.models.forEach((m) => {
+    bar.querySelector('.model-pill[data-model="' + m.id + '"]').onclick = () => {
+      if (m.id !== MODEL.active_id) api("/api/model/select", { id: m.id });
+    };
+  });
+  $("model-add").onclick = createModel;
+  $("model-rename").onclick = renameActiveModel;
+  $("model-delete").onclick = deleteActiveModel;
+}
+
+async function createModel() {
+  const name = (prompt("Name the new activity model (e.g. Data Science):") || "").trim();
+  if (name) await api("/api/model/add", { name });
+}
+async function renameActiveModel() {
+  const meta = activeModelMeta();
+  if (!meta) return;
+  const name = (prompt("Rename this model:", meta.name) || "").trim();
+  if (name && name !== meta.name) await api("/api/model/rename", { id: meta.id, name });
+}
+async function deleteActiveModel() {
+  const meta = activeModelMeta();
+  if (!meta) return;
+  if (MODEL.models.length <= 1) { toast("Keep at least one model."); return; }
+  if (confirm('Delete the "' + meta.name + '" model and everything in it?'))
+    await api("/api/model/delete", { id: meta.id });
+}
+
+// --- "Applies when" scope strip. ---------------------------------------------------------------
+const currentDimensions = () => (MODEL.applies_when.dimensions || []).map((d) => ({ name: d.name, values: [...d.values] }));
+const saveScope = (dims) => api("/api/model/scope/set", { id: MODEL.active_id, dimensions: dims });
+
+function renderScope() {
+  const el = $("scope-strip");
+  if (!MODEL.active_id) { el.innerHTML = ""; return; }
+  const dims = MODEL.applies_when.dimensions || [];
+  let html = '<span class="scope-lead">Applies when</span>';
+  if (!dims.length) html += '<span class="scope-any">everywhere — no context restriction</span>';
+  html += dims.map((d, i) =>
+    '<span class="scope-dim">' +
+      '<span class="scope-name">' + esc(d.name) + "</span>" +
+      (d.values.length
+        ? d.values.map((v, j) =>
+            '<span class="scope-chip">' + esc(v) +
+            '<button class="chip-x" data-dim="' + i + '" data-val="' + j + '" title="Remove value">×</button></span>').join("")
+        : '<span class="scope-chip any">any value</span>') +
+      '<input class="scope-add" data-dim="' + i + '" placeholder="+ value" autocomplete="off">' +
+      '<button class="chip-x dim-x" data-dim="' + i + '" title="Remove dimension">✕</button>' +
+    "</span>").join("");
+  html += '<button class="btn small ghost" id="scope-add-dim">＋ dimension</button>';
+  el.innerHTML = html;
+
+  el.querySelectorAll(".chip-x:not(.dim-x)").forEach((b) => b.onclick = () => {
+    const d = currentDimensions(); d[+b.dataset.dim].values.splice(+b.dataset.val, 1); saveScope(d);
+  });
+  el.querySelectorAll(".dim-x").forEach((b) => b.onclick = () => {
+    const d = currentDimensions(); d.splice(+b.dataset.dim, 1); saveScope(d);
+  });
+  el.querySelectorAll(".scope-add").forEach((inp) => inp.onkeydown = (e) => {
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    const v = inp.value.trim();
+    if (!v) return;
+    const d = currentDimensions();
+    if (d[+inp.dataset.dim].values.includes(v)) { toast("That value is already listed."); return; }
+    d[+inp.dataset.dim].values.push(v); saveScope(d);
+  });
+  $("scope-add-dim").onclick = () => {
+    const name = (prompt("Context dimension this model is scoped to (e.g. repo, team, environment):") || "").trim();
+    if (!name) return;
+    const d = currentDimensions();
+    if (d.some((x) => x.name === name)) { toast("That dimension is already set."); return; }
+    d.push({ name, values: [] }); saveScope(d);
+  };
+}
+
+// --- Import-from-another-model dialog. ---------------------------------------------------------
+function openImport() {
+  const others = MODEL.models.filter((m) => m.id !== MODEL.active_id);
+  if (!others.length) { toast("Add another model to import from."); return; }
+  const target = activeModelMeta();
+  const modal = $("import-modal");
+  let sourceId = others[0].id;
+  let kind = "activity";
+
+  const sourceModel = () => MODEL.models.find((m) => m.id === sourceId);
+  const entities = () => {
+    const s = sourceModel();
+    return kind === "activity" ? s.activities : kind === "risk" ? s.risks : s.safeguards;
+  };
+
+  function draw() {
+    const list = entities();
+    const sourceOpts = others.map((m) =>
+      '<option value="' + m.id + '"' + (m.id === sourceId ? " selected" : "") + ">" + esc(m.name) + "</option>").join("");
+    const entOpts = list.map((e) => {
+      const pad = e.depth ? "\\u00a0\\u00a0".repeat(e.depth) + "↳ " : "";
+      return '<option value="' + e.id + '">' + pad + esc(e.label) + "</option>";
+    }).join("");
+    modal.innerHTML =
+      '<div class="modal">' +
+        "<h3>Import into “" + esc(target ? target.name : "") + "”</h3>" +
+        '<p class="sub">Copies the item in. The source model is left untouched.</p>' +
+        '<div class="row"><label>From model</label><select id="imp-source">' + sourceOpts + "</select></div>" +
+        '<div class="picker-tabs" id="imp-kinds">' +
+          '<button data-kind="activity"' + (kind === "activity" ? ' class="active"' : "") + ">Activity</button>" +
+          '<button data-kind="risk"' + (kind === "risk" ? ' class="active"' : "") + ">Risk</button>" +
+          '<button data-kind="safeguard"' + (kind === "safeguard" ? ' class="active"' : "") + ">Safeguard</button>" +
+        "</div>" +
+        '<div class="row"><label>Item</label><select id="imp-entity">' +
+          (entOpts || "<option value=''>— nothing to import —</option>") + "</select></div>" +
+        (kind === "activity"
+          ? '<div class="import-preview">Imports the activity <b>and</b> its sub-activities, the risks &amp; ' +
+            "safeguards it references, and the edges wiring them — so it lands fully governed.</div>"
+          : "") +
+        '<div class="modal-foot">' +
+          '<button class="btn" id="imp-cancel">Cancel</button>' +
+          '<button class="btn primary" id="imp-go"' + (list.length ? "" : " disabled") + ">Import</button>" +
+        "</div>" +
+      "</div>";
+    $("imp-source").onchange = (e) => { sourceId = e.target.value; draw(); };
+    modal.querySelectorAll("#imp-kinds button").forEach((b) =>
+      b.onclick = () => { kind = b.dataset.kind; draw(); });
+    $("imp-cancel").onclick = closeImport;
+    $("imp-go").onclick = async () => {
+      const eid = $("imp-entity").value;
+      if (!eid) return;
+      const res = await api("/api/model/import",
+        { target_id: MODEL.active_id, source_id: sourceId, kind, entity_id: eid });
+      if (res) { closeImport(); toast("Imported into " + (target ? target.name : "model") + "."); }
+    };
+  }
+  draw();
+  modal.classList.remove("hidden");
+  modal.onclick = (e) => { if (e.target === modal) closeImport(); };
+}
+function closeImport() { const m = $("import-modal"); m.classList.add("hidden"); m.innerHTML = ""; }
+
 // --- Top-level render + boot. ------------------------------------------------------------------
-function render() { renderTree(); renderDetail(); renderLibraries(); }
+function render() {
+  // A model switch resets per-model view state and opens onto the new model's first activity.
+  if (MODEL.active_id !== activeId) {
+    activeId = MODEL.active_id;
+    collapsed.clear();
+    openRisks.clear();
+    const first = topLevel()[0];
+    selectedId = first ? first.id : null;
+  }
+  renderModels();
+  renderScope();
+  renderTree();
+  renderDetail();
+  renderLibraries();
+}
 
 (function init() {
   // Theme toggle: stamp data-theme so it wins over the prefers-color-scheme default in both directions.
@@ -608,6 +832,8 @@ function render() { renderTree(); renderDetail(); renderLibraries(); }
     document.documentElement.setAttribute("data-theme", next);
   };
   $("add-root").onclick = () => addActivity(null);
+  $("import-open").onclick = openImport;
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeImport(); });
   // Open onto the first top-level activity so the detail pane is populated on first paint.
   const first = topLevel()[0];
   if (first) selectedId = first.id;

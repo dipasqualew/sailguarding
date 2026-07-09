@@ -17,24 +17,48 @@ mutation), the whole aggregate is versioned and round-trip stable, and an inject
 """
 
 from sailguarding.model.model import (
+    DEFAULT_MODEL_ID,
     MODEL_SCHEMA_VERSION,
     ROOT_ID,
     ActivityModel,
 )
 from sailguarding.model.risk import RISK_SCHEMA_VERSION, Risk
+from sailguarding.model.scope import (
+    SCOPE_SCHEMA_VERSION,
+    ContextScope,
+    DimensionConstraint,
+)
 from sailguarding.model.store import (
     ActivityModelStore,
     FileActivityModelStore,
+    FileWorkspaceStore,
     InMemoryActivityModelStore,
+    InMemoryWorkspaceStore,
+    WorkspaceStore,
+)
+from sailguarding.model.workspace import (
+    WORKSPACE_SCHEMA_VERSION,
+    ImportKind,
+    Workspace,
 )
 
 __all__ = [
+    "DEFAULT_MODEL_ID",
     "MODEL_SCHEMA_VERSION",
     "RISK_SCHEMA_VERSION",
     "ROOT_ID",
+    "SCOPE_SCHEMA_VERSION",
+    "WORKSPACE_SCHEMA_VERSION",
     "ActivityModel",
     "ActivityModelStore",
+    "ContextScope",
+    "DimensionConstraint",
     "FileActivityModelStore",
+    "FileWorkspaceStore",
+    "ImportKind",
     "InMemoryActivityModelStore",
+    "InMemoryWorkspaceStore",
     "Risk",
+    "Workspace",
+    "WorkspaceStore",
 ]

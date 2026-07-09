@@ -19,13 +19,16 @@ import os
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from sailguarding.model import (
     ActivityModel,
-    ActivityModelStore,
-    FileActivityModelStore,
-    InMemoryActivityModelStore,
+    ContextScope,
+    FileWorkspaceStore,
+    ImportKind,
+    InMemoryWorkspaceStore,
+    Workspace,
+    WorkspaceStore,
 )
 from sailguarding.model.model import ROOT_ID
 from sailguarding.safeguards import Measurement, SafeguardKind
@@ -33,14 +36,14 @@ from sailguarding.web import scenario
 from sailguarding.web.page import render_page
 
 
-def store_backed_model_store() -> ActivityModelStore | None:
-    """A durable :class:`FileActivityModelStore` under the configured store root, or ``None``.
+def store_backed_workspace_store() -> WorkspaceStore | None:
+    """A durable :class:`FileWorkspaceStore` under the configured store root, or ``None``.
 
     Mirrors the sensor's own store resolution: the same
     :class:`~sailguarding.sensor.config.SensorConfig` the hook resolves picks the root (under the
-    git dir by default), and the model lives in ``model.json`` there. Kept fail-soft — a non-git
-    directory, a permissions error, any storage failure yields ``None`` so the caller falls back to
-    an in-memory store rather than breaking the server.
+    git dir by default), and the workspace lives in ``workspace.json`` there. Kept fail-soft — a
+    non-git directory, a permissions error, any storage failure yields ``None`` so the caller falls
+    back to an in-memory store rather than breaking the server.
     """
     try:
         from sailguarding.sensor.cli import ENV_PROJECT_DIR
@@ -54,7 +57,7 @@ def store_backed_model_store() -> ActivityModelStore | None:
         config = SensorConfig.resolve(repo, env, load_from_env(env))
         root = resolve_store_root(git, repo, config.store_path)
         root.mkdir(parents=True, exist_ok=True)
-        return FileActivityModelStore(root / "model.json")
+        return FileWorkspaceStore(root / "workspace.json")
     except Exception:
         return None
 
@@ -69,32 +72,41 @@ class Response:
 
 
 class App:
-    """Holds the current :class:`ActivityModel` and routes requests that read or mutate it.
+    """Holds the :class:`Workspace` and routes requests that read or mutate it.
 
-    On construction the model is loaded from the injected store; an empty store is seeded with
-    :func:`scenario.seed_model` and saved, so a fresh instance always opens onto the starter model.
-    Every mutation applies a pure transform, swaps in the new model, and persists it, so a second
-    :class:`App` built on the same store sees the change.
+    On construction the workspace is loaded from the injected store; an empty store is seeded with
+    :func:`scenario.seed_workspace` and saved, so a fresh instance always opens onto the starter
+    models. Every mutation applies a pure transform, swaps in the new workspace, and persists it, so
+    a second :class:`App` built on the same store sees the change.
 
-    :param store: Where the model is loaded from and saved to. Defaults to a fresh
-        :class:`InMemoryActivityModelStore` — the injectable, no-I/O unit-test default.
+    Model-level routes (``/api/model/*``) act on the workspace; activity/risk/safeguard/mitigation
+    routes act on the **active** model within it — the same transforms the single-model editor used,
+    now scoped to whichever model the switcher has selected.
+
+    :param store: Where the workspace is loaded from and saved to. Defaults to a fresh
+        :class:`InMemoryWorkspaceStore` — the injectable, no-I/O unit-test default.
     """
 
-    def __init__(self, store: ActivityModelStore | None = None) -> None:
-        self._store: ActivityModelStore = store or InMemoryActivityModelStore()
-        model = self._store.load()
-        if model is None:
-            model = scenario.seed_model()
-            self._store.save(model)
-        self._model = model
+    def __init__(self, store: WorkspaceStore | None = None) -> None:
+        self._store: WorkspaceStore = store or InMemoryWorkspaceStore()
+        workspace = self._store.load()
+        if workspace is None:
+            workspace = scenario.seed_workspace()
+            self._store.save(workspace)
+        self._workspace = workspace
 
     @property
-    def model(self) -> ActivityModel:
-        return self._model
+    def workspace(self) -> Workspace:
+        return self._workspace
+
+    @property
+    def model(self) -> ActivityModel | None:
+        """The active model — a convenience for callers that only care about the current model."""
+        return self._workspace.active()
 
     def view_model(self) -> dict[str, Any]:
-        """The JSON the UI renders — the model flattened for the wire (see :func:`view_model`)."""
-        return view_model(self._model)
+        """The JSON the UI renders — the workspace and its active model (see :func:`view_model`)."""
+        return view_model(self._workspace)
 
     def handle(self, method: str, path: str, query: str = "", body: bytes = b"") -> Response:
         """Route one request. ``GET`` reads; ``POST`` mutates; everything else is a 405."""
@@ -130,69 +142,180 @@ class App:
         if outcome is None:
             return _json({"error": f"not found: {path}"}, status=404)
 
-        model, created_id = outcome
-        self._model = model
-        self._store.save(model)
+        workspace, created_id = outcome
+        self._workspace = workspace
+        self._store.save(workspace)
         return _json({"model": self.view_model(), "created_id": created_id})
 
-    def _apply(self, path: str, payload: dict[str, Any]) -> tuple[ActivityModel, str | None] | None:
+    def _apply(self, path: str, payload: dict[str, Any]) -> tuple[Workspace, str | None] | None:
         """Apply the mutation named by ``path``. ``None`` means the path is unknown (a 404).
 
-        Returns ``(new_model, created_id)``; ``created_id`` is the fresh id for creating routes and
-        ``None`` for edge/rename/delete routes. Missing or wrong-typed fields raise
-        :class:`ValueError`; missing references raise :class:`KeyError` — both become 400s upstream.
+        Returns ``(new_workspace, created_id)``; ``created_id`` is the fresh id for creating routes
+        and ``None`` otherwise. Missing or wrong-typed fields raise :class:`ValueError`; missing
+        references raise :class:`KeyError` — both become 400s upstream.
         """
-        model = self._model
+        model_route = self._apply_model(path, payload)
+        if model_route is not None:
+            return model_route
+        return self._apply_active(path, payload)
+
+    def _apply_model(
+        self, path: str, payload: dict[str, Any]
+    ) -> tuple[Workspace, str | None] | None:
+        """Workspace-level routes: create, rename, delete, select, scope, and cross-model import."""
+        ws = self._workspace
+        if path == "/api/model/add":
+            return ws.add_model(_str(payload, "name"))
+        if path == "/api/model/rename":
+            return ws.rename_model(_str(payload, "id"), _str(payload, "name")), None
+        if path == "/api/model/delete":
+            return ws.remove_model(_str(payload, "id")), None
+        if path == "/api/model/select":
+            return ws.select(_str(payload, "id")), None
+        if path == "/api/model/scope/set":
+            model = ws.find(_str(payload, "id"))
+            if model is None:
+                raise KeyError(f"no model {payload.get('id')!r} in workspace")
+            scope = _scope(payload)
+            return ws.replace_model(model.set_applies_when(scope)), None
+        if path == "/api/model/import":
+            return ws.import_into(
+                _str(payload, "target_id"),
+                _str(payload, "source_id"),
+                _import_kind(payload),
+                _str(payload, "entity_id"),
+                _opt_str(payload, "parent_id"),
+            )
+        return None
+
+    def _apply_active(
+        self, path: str, payload: dict[str, Any]
+    ) -> tuple[Workspace, str | None] | None:
+        """Active-model routes: the activity/risk/safeguard/mitigation transforms."""
+        known = {
+            "/api/activity/add",
+            "/api/activity/rename",
+            "/api/activity/delete",
+            "/api/risk/create",
+            "/api/activity/risk/attach",
+            "/api/activity/risk/detach",
+            "/api/safeguard/create",
+            "/api/mitigation/add",
+            "/api/mitigation/remove",
+        }
+        if path not in known:
+            return None
+        model = self._workspace.active()
+        if model is None:
+            raise KeyError("no active model to edit")
+
+        created_id: str | None = None
         if path == "/api/activity/add":
-            return model.add_activity(_opt_str(payload, "parent_id"), _str(payload, "label"))
-        if path == "/api/activity/rename":
-            return model.rename_activity(_str(payload, "id"), _str(payload, "label")), None
-        if path == "/api/activity/delete":
-            return model.remove_activity(_str(payload, "id")), None
-        if path == "/api/risk/create":
-            return model.add_risk(_str(payload, "label"), _opt_str(payload, "description") or "")
-        if path == "/api/activity/risk/attach":
-            return model.attach_risk(_str(payload, "activity_id"), _str(payload, "risk_id")), None
-        if path == "/api/activity/risk/detach":
-            return model.detach_risk(_str(payload, "activity_id"), _str(payload, "risk_id")), None
-        if path == "/api/safeguard/create":
-            return model.add_safeguard(
+            model, created_id = model.add_activity(
+                _opt_str(payload, "parent_id"), _str(payload, "label")
+            )
+        elif path == "/api/activity/rename":
+            model = model.rename_activity(_str(payload, "id"), _str(payload, "label"))
+        elif path == "/api/activity/delete":
+            model = model.remove_activity(_str(payload, "id"))
+        elif path == "/api/risk/create":
+            model, created_id = model.add_risk(
+                _str(payload, "label"), _opt_str(payload, "description") or ""
+            )
+        elif path == "/api/activity/risk/attach":
+            model = model.attach_risk(_str(payload, "activity_id"), _str(payload, "risk_id"))
+        elif path == "/api/activity/risk/detach":
+            model = model.detach_risk(_str(payload, "activity_id"), _str(payload, "risk_id"))
+        elif path == "/api/safeguard/create":
+            model, created_id = model.add_safeguard(
                 _str(payload, "label"),
                 SafeguardKind(_str(payload, "kind")),
                 Measurement(_str(payload, "measures")),
                 _opt_str(payload, "metric") or "",
                 _cadence(payload),
             )
-        if path == "/api/mitigation/add":
-            return (
-                model.add_mitigation(
-                    _str(payload, "activity_id"),
-                    _str(payload, "risk_id"),
-                    _str(payload, "safeguard_id"),
-                ),
-                None,
+        elif path == "/api/mitigation/add":
+            model = model.add_mitigation(
+                _str(payload, "activity_id"),
+                _str(payload, "risk_id"),
+                _str(payload, "safeguard_id"),
             )
-        if path == "/api/mitigation/remove":
-            return (
-                model.remove_mitigation(
-                    _str(payload, "activity_id"),
-                    _str(payload, "risk_id"),
-                    _str(payload, "safeguard_id"),
-                ),
-                None,
+        elif path == "/api/mitigation/remove":
+            model = model.remove_mitigation(
+                _str(payload, "activity_id"),
+                _str(payload, "risk_id"),
+                _str(payload, "safeguard_id"),
             )
-        return None
+        return self._workspace.replace_model(model), created_id
 
 
-def view_model(model: ActivityModel) -> dict[str, Any]:
-    """Flatten an :class:`ActivityModel` into the JSON shape the editor renders.
+def view_model(workspace: Workspace) -> dict[str, Any]:
+    """Flatten a :class:`Workspace` into the JSON shape the editor renders.
+
+    The top level carries the **model switcher** — ``models`` (each with its id, name, applicability
+    scope, and headline counts) and the ``active_id`` — plus the **active model's** own flattened
+    view (``activities``/``risks``/``safeguards``/edges and ``applies_when``), so the existing panes
+    read the active model exactly as before while the header can navigate between models.
+    """
+    active = workspace.active()
+    payload: dict[str, Any] = {
+        "models": [_model_summary(m) for m in workspace.models],
+        "active_id": workspace.active_id,
+    }
+    payload.update(model_view(active))
+    return payload
+
+
+def _model_summary(model: ActivityModel) -> dict[str, Any]:
+    """A model's header entry: name, scope, headline counts, and pick-lists for the import dialog.
+
+    The pick-lists (``activities``/``risks``/``safeguards`` as id + label) let the client offer a
+    *source* model's entities in the import dialog without a second round-trip — the whole workspace
+    travels in one payload.
+    """
+    activities: list[dict[str, Any]] = []
+    for top in model.top_level():
+        _pick_activities(top, 0, activities)
+    return {
+        "id": model.id,
+        "name": model.name,
+        "applies_when": _applies_when_dict(model.applies_when),
+        "activity_count": len(activities),
+        "risk_count": len(model.risks),
+        "safeguard_count": len(model.safeguards),
+        "activities": activities,
+        "risks": [{"id": r.id, "label": r.label} for r in model.risks],
+        "safeguards": [
+            {"id": s.id, "label": s.label, "kind": s.kind.value, "measures": s.measures.value}
+            for s in model.safeguards
+        ],
+    }
+
+
+def _pick_activities(node: Any, depth: int, out: list[dict[str, Any]]) -> None:
+    """Collect ``{id, label, depth}`` for a subtree — the import dialog's activity picker source."""
+    out.append({"id": node.id, "label": node.label, "depth": depth})
+    for child in node.children:
+        _pick_activities(child, depth + 1, out)
+
+
+def model_view(model: ActivityModel | None) -> dict[str, Any]:
+    """The active model's flattened view — activities, libraries, edges, and applicability.
 
     Activities come back depth-first with the synthetic root excluded, each carrying its depth,
     child ids, and the counts (risks faced, mitigation edges) the birds-eye tree reads. Risks and
-    safeguards carry their reuse count (``used_by`` = distinct activities referencing them). The
-    edge lists (``activity_risks``, ``mitigations``) are handed over flat and sorted; the JS joins
-    them against the libraries to build per-activity detail.
+    safeguards carry their reuse count (``used_by`` = distinct activities referencing them). Returns
+    empty collections when there is no active model (an empty workspace).
     """
+    if model is None:
+        return {
+            "activities": [],
+            "risks": [],
+            "safeguards": [],
+            "activity_risks": [],
+            "mitigations": [],
+            "applies_when": _applies_when_dict(ContextScope.empty()),
+        }
     activities: list[dict[str, Any]] = []
     for top in model.top_level():
         _flatten(model, top, 0, activities)
@@ -224,6 +347,15 @@ def view_model(model: ActivityModel) -> dict[str, Any]:
         "safeguards": safeguards,
         "activity_risks": sorted([a, r] for (a, r) in model.activity_risks),
         "mitigations": sorted([a, r, s] for (a, r, s) in model.mitigations),
+        "applies_when": _applies_when_dict(model.applies_when),
+    }
+
+
+def _applies_when_dict(scope: ContextScope) -> dict[str, Any]:
+    """The wire shape for an applicability scope: its dimensions plus a human summary."""
+    return {
+        "dimensions": [{"name": c.name, "values": list(c.values)} for c in scope.dimensions],
+        "summary": scope.describe(),
     }
 
 
@@ -259,6 +391,37 @@ def _opt_str(payload: dict[str, Any], key: str) -> str | None:
     if not isinstance(value, str):
         raise ValueError(f"field {key!r} must be a string or null")
     return value
+
+
+def _scope(payload: dict[str, Any]) -> ContextScope:
+    """Build a :class:`ContextScope` from a ``{dimensions: [{name, values: [...]}]}`` payload.
+
+    Order is preserved; a malformed dimension (missing/typed-wrong ``name`` or a non-list
+    ``values``, or a non-string value) raises :class:`ValueError` and becomes a 400 upstream.
+    """
+    raw = payload.get("dimensions", [])
+    if not isinstance(raw, list):
+        raise ValueError("field 'dimensions' must be a list")
+    scope = ContextScope.empty()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise ValueError("each dimension must be an object")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("each dimension needs a non-empty 'name'")
+        values = entry.get("values", [])
+        if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+            raise ValueError(f"dimension {name!r} 'values' must be a list of strings")
+        scope = scope.set_dimension(name, values)
+    return scope
+
+
+def _import_kind(payload: dict[str, Any]) -> ImportKind:
+    """Read and validate the import ``kind`` (``activity`` / ``risk`` / ``safeguard``)."""
+    kind = _str(payload, "kind")
+    if kind not in ("activity", "risk", "safeguard"):
+        raise ValueError(f"unknown import kind {kind!r}")
+    return cast(ImportKind, kind)
 
 
 def _cadence(payload: dict[str, Any]) -> timedelta | None:

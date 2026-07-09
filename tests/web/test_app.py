@@ -9,13 +9,13 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from sailguarding.model import InMemoryActivityModelStore
+from sailguarding.model import InMemoryWorkspaceStore
 from sailguarding.web import App
 from sailguarding.web.app import Response
 
 
 def _app() -> App:
-    return App(InMemoryActivityModelStore())
+    return App(InMemoryWorkspaceStore())
 
 
 def _post(app: App, path: str, body: dict[str, Any]) -> Response:
@@ -221,11 +221,173 @@ def test_shared_safeguard_reaches_used_by_two_via_the_api() -> None:
     assert backups["used_by"] == 2
 
 
+# --- Workspace: the model switcher --------------------------------------------------------------
+
+
+def test_view_model_exposes_the_workspace_models_and_active_id() -> None:
+    view = _view(_app())
+    models = {m["id"]: m for m in view["models"]}
+    assert set(models) == {
+        "product-software-engineering",
+        "platform-software-engineering",
+        "sales",
+    }
+    assert view["active_id"] == "product-software-engineering"
+    # The active model's applicability travels at the top level too.
+    assert view["applies_when"]["summary"] == "repo ∈ {checkout, billing}"
+    assert models["product-software-engineering"]["applies_when"]["summary"] == (
+        "repo ∈ {checkout, billing}"
+    )
+
+
+def test_each_model_summary_carries_pick_lists_and_counts() -> None:
+    product = next(m for m in _view(_app())["models"] if m["id"] == "product-software-engineering")
+    assert product["name"] == "Product Software Engineering"
+    assert product["activity_count"] == len(product["activities"]) == 3
+    assert {a["label"] for a in product["activities"]} == {
+        "Develop new capabilities",
+        "Write software",
+        "Test software",
+    }
+    assert {r["label"] for r in product["risks"]} == {
+        "Break capabilities",
+        "Data loss",
+        "Opportunity cost",
+    }
+    assert {s["label"] for s in product["safeguards"]} == {
+        "Human code reviews",
+        "Ephemeral environments",
+    }
+
+
+def test_select_switches_the_active_model_and_its_view() -> None:
+    app = _app()
+    model = _model(_post(app, "/api/model/select", {"id": "sales"}))
+    view = app.view_model()
+    assert view["active_id"] == "sales"
+    labels = [a["label"] for a in model["activities"]]
+    assert labels == ["Close new business", "Qualify the lead", "Send the proposal"]
+
+
+def test_select_unknown_model_is_400() -> None:
+    assert _post(_app(), "/api/model/select", {"id": "nope"}).status == 400
+
+
+def test_add_model_creates_and_activates_it() -> None:
+    app = _app()
+    data = _json(_post(app, "/api/model/add", {"name": "Support"}))
+    created = data["created_id"]
+    assert created == "support"
+    assert data["model"]["active_id"] == "support"
+    assert any(m["id"] == "support" for m in data["model"]["models"])
+    # The freshly created model is empty.
+    assert data["model"]["activities"] == []
+
+
+def test_rename_model() -> None:
+    app = _app()
+    model = _model(_post(app, "/api/model/rename", {"id": "sales", "name": "Revenue"}))
+    sales = next(m for m in model["models"] if m["id"] == "sales")
+    assert sales["name"] == "Revenue"
+
+
+def test_delete_model_removes_it() -> None:
+    app = _app()
+    model = _model(_post(app, "/api/model/delete", {"id": "sales"}))
+    assert all(m["id"] != "sales" for m in model["models"])
+
+
+def test_scope_set_updates_a_models_applies_when() -> None:
+    app = _app()
+    model = _model(
+        _post(
+            app,
+            "/api/model/scope/set",
+            {"id": "sales", "dimensions": [{"name": "team", "values": ["sales", "growth"]}]},
+        )
+    )
+    sales = next(m for m in model["models"] if m["id"] == "sales")
+    assert sales["applies_when"]["summary"] == "team ∈ {sales, growth}"
+
+
+def test_scope_set_with_a_bad_dimension_is_400() -> None:
+    app = _app()
+    # A dimension missing its name is a client error, not a crash.
+    bad_name = _post(
+        app, "/api/model/scope/set", {"id": "sales", "dimensions": [{"values": ["x"]}]}
+    )
+    assert bad_name.status == 400
+    # Non-list values is likewise a 400.
+    bad_values = _post(
+        app,
+        "/api/model/scope/set",
+        {"id": "sales", "dimensions": [{"name": "team", "values": "sales"}]},
+    )
+    assert bad_values.status == 400
+
+
+def test_import_copies_an_activity_from_platform_into_product() -> None:
+    app = _app()
+    view = _view(app)
+    platform = next(m for m in view["models"] if m["id"] == "platform-software-engineering")
+    operate = _find(platform["activities"], "Operate the platform")
+    before = platform["activity_count"]
+
+    data = _json(
+        _post(
+            app,
+            "/api/model/import",
+            {
+                "target_id": "product-software-engineering",
+                "source_id": "platform-software-engineering",
+                "kind": "activity",
+                "entity_id": operate["id"],
+            },
+        )
+    )
+    created = data["created_id"]  # the new activity id in the target model
+    assert isinstance(created, str) and created
+    # Product (the active model) gained a top-level activity.
+    top_labels = [a["label"] for a in data["model"]["activities"] if a["depth"] == 0]
+    assert "Operate the platform" in top_labels
+    # The source (platform) is untouched — same activity count as before.
+    platform_after = next(
+        m for m in data["model"]["models"] if m["id"] == "platform-software-engineering"
+    )
+    assert platform_after["activity_count"] == before
+
+
+def test_import_unknown_kind_is_400() -> None:
+    response = _post(
+        _app(),
+        "/api/model/import",
+        {
+            "target_id": "product-software-engineering",
+            "source_id": "sales",
+            "kind": "bogus",
+            "entity_id": "whatever",
+        },
+    )
+    assert response.status == 400
+
+
+def test_active_model_route_mutates_only_the_active_model() -> None:
+    app = _app()
+    # Add a top-level activity to Product (the active model).
+    _post(app, "/api/activity/add", {"parent_id": None, "label": "Extra activity"})
+    view = app.view_model()
+    product = next(m for m in view["models"] if m["id"] == "product-software-engineering")
+    sales = next(m for m in view["models"] if m["id"] == "sales")
+    assert any(a["label"] == "Extra activity" for a in product["activities"])
+    # Sales, which was not active, is unchanged.
+    assert all(a["label"] != "Extra activity" for a in sales["activities"])
+
+
 # --- Persistence --------------------------------------------------------------------------------
 
 
 def test_mutation_is_persisted_to_the_injected_store() -> None:
-    store = InMemoryActivityModelStore()
+    store = InMemoryWorkspaceStore()
     app = App(store)
     _post(app, "/api/activity/add", {"parent_id": None, "label": "Persisted root"})
     # A second App on the same store sees the change — it was saved, not just held in memory.
@@ -235,9 +397,9 @@ def test_mutation_is_persisted_to_the_injected_store() -> None:
 
 
 def test_empty_store_is_seeded_and_saved_on_construction() -> None:
-    store = InMemoryActivityModelStore()
+    store = InMemoryWorkspaceStore()
     App(store)
-    assert store.load() is not None  # seeding persisted the starter model
+    assert store.load() is not None  # seeding persisted the starter workspace
 
 
 # --- Fail-soft error handling -------------------------------------------------------------------
