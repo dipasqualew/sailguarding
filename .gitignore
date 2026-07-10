@@ -6,6 +6,10 @@ __pycache__/
 dist/
 build/
 
+# Frontend (React SPA) — deps and the generated build that `sg serve` serves
+frontend/node_modules/
+src/sailguarding/web/static/
+
 # Tooling caches
 .mypy_cache/
 .ruff_cache/

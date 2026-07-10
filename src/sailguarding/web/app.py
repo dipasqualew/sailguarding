@@ -33,7 +33,30 @@ from sailguarding.model import (
 from sailguarding.model.model import ROOT_ID
 from sailguarding.safeguards import Measurement, SafeguardKind
 from sailguarding.web import scenario
-from sailguarding.web.page import render_page
+
+# The built React SPA lands here (Vite's ``build.outDir``); ``sg serve`` serves it as static files.
+STATIC_ROOT = Path(__file__).parent / "static"
+
+_CONTENT_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".png": "image/png",
+    ".woff2": "font/woff2",
+    ".map": "application/json; charset=utf-8",
+}
+
+# Shown when the SPA has not been built yet — so ``sg serve`` explains itself instead of 404ing.
+_NOT_BUILT = (
+    "<!doctype html><meta charset=utf-8><title>sailguarding — activity models</title>"
+    "<body style='font-family:system-ui;max-width:40rem;margin:4rem auto;padding:0 1rem'>"
+    "<h1>sailguarding</h1><p>The activity-model editor front-end has not been built yet.</p>"
+    "<p>Run <code>cd frontend &amp;&amp; npm ci &amp;&amp; npm run build</code> "
+    "(or <code>./setup.sh</code>) and reload.</p>"
+)
 
 
 def store_backed_workspace_store() -> WorkspaceStore | None:
@@ -117,11 +140,29 @@ class App:
         return _json({"error": f"method {method} not allowed"}, status=405)
 
     def _get(self, path: str) -> Response:
-        if path == "/":
-            html = render_page(self.view_model())
-            return Response(200, "text/html; charset=utf-8", html.encode("utf-8"))
         if path == "/api/model":
             return _json(self.view_model())
+        if path.startswith("/api/"):
+            return _json({"error": f"not found: {path}"}, status=404)
+        return self._serve_static(path)
+
+    def _serve_static(self, path: str) -> Response:
+        """Serve the built SPA. ``/`` renders the app shell (``index.html``); other paths serve the
+        matching built asset. A missing build renders a help page so the server never hard-fails,
+        and an unknown path is a 404 — the SPA has no client-side routing to fall back to."""
+        index = STATIC_ROOT / "index.html"
+        rel = path.lstrip("/")
+
+        if not rel:
+            if not index.exists():
+                return Response(200, "text/html; charset=utf-8", _NOT_BUILT.encode("utf-8"))
+            return Response(200, "text/html; charset=utf-8", index.read_bytes())
+
+        target = (STATIC_ROOT / rel).resolve()
+        # Traversal guard: only serve files that resolve inside the static root.
+        if STATIC_ROOT.resolve() in target.parents and target.is_file():
+            content_type = _CONTENT_TYPES.get(target.suffix.lower(), "application/octet-stream")
+            return Response(200, content_type, target.read_bytes())
         return _json({"error": f"not found: {path}"}, status=404)
 
     def _post(self, path: str, body: bytes) -> Response:

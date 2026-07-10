@@ -20,6 +20,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sailguarding"]
+# The built React SPA (frontend/ → web/static) is git-ignored, so force it into the wheel; `sg serve`
+# serves it off disk. Build the front-end (`./setup.sh` / `npm run build`) before packaging.
+artifacts = ["src/sailguarding/web/static/**"]
 
 [tool.uv.workspace]
 # `cli` (the `sg` operator CLI) is a sibling package. It may depend on Click; keeping it a
@@ -40,11 +43,6 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
-
-[tool.ruff.lint.per-file-ignores]
-# page.py is a self-contained HTML/CSS/JS template string: long style rules and typographic
-# characters (en dashes, arrows) are intentional and not Python to be reflowed.
-"src/sailguarding/web/page.py" = ["E501", "RUF001"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -54,7 +54,9 @@ def test_serves_the_dashboard(base_url: str) -> None:
     status, content_type, body = _get(base_url, "/")
     assert status == 200
     assert content_type.startswith("text/html")
-    assert b"activity model" in body
+    # Build-agnostic: the built SPA's <title> and the not-built help page both name the app, so this
+    # holds whether or not `npm run build` has run.
+    assert b"sailguarding" in body
 
 
 def test_serves_the_model_api(base_url: str) -> None:

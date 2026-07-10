@@ -47,16 +47,13 @@ def _find(items: list[dict[str, Any]], label: str) -> dict[str, Any]:
 # --- Reads --------------------------------------------------------------------------------------
 
 
-def test_index_serves_a_populated_html_page() -> None:
+def test_index_serves_the_spa_shell() -> None:
+    # `/` serves the React SPA's HTML shell (or a build-me page if the front-end isn't built yet).
+    # The model itself is fetched client-side from /api/model, exercised by the tests below.
     response = _app().handle("GET", "/")
     assert response.status == 200
     assert response.content_type.startswith("text/html")
-    body = response.body.decode("utf-8")
-    assert "window.__MODEL__" in body
-    assert "__MODEL_JSON__" not in body  # the token is filled
-    # The seed model reaches the page so the first paint is populated.
-    assert "Develop new capabilities" in body
-    assert "Human code reviews" in body
+    assert "sailguarding" in response.body.decode("utf-8")
 
 
 def test_api_model_returns_the_seeded_view_model() -> None:

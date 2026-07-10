@@ -34,9 +34,18 @@ mis-scoped or missing its demo surface — fix that as part of the story, not af
 
 ## Conventions
 
-- **Zero runtime dependencies.** `pyproject.toml` keeps `dependencies = []`; the engine and the
-  demo surface are **stdlib-only** and offline-friendly by design. Dev tooling (ruff, mypy,
-  pytest) lives in the `dev` dependency group.
+- **Zero-dependency engine.** `pyproject.toml` keeps the `sailguarding` engine's
+  `dependencies = []`; the core is stdlib-only. Dev tooling (ruff, mypy, pytest) lives in the `dev`
+  group.
+- **The front-end is a real React SPA.** It lives in [`frontend/`](frontend/) (Vite + React +
+  TypeScript) and talks to the engine's JSON API. `npm run build` lands the bundle in
+  `src/sailguarding/web/static/`, and `sg serve` serves it; `npm run dev` runs HMR against a live
+  Python server (it proxies `/api`). The API base is configurable (`VITE_API_BASE`) so the SPA can
+  later point at a separate hosted backend. (The old "stdlib-only, no build step" rule for the web
+  surface is retired — Node is dev tooling, like ruff/mypy.)
+- **The JSON API is the contract.** [`web/app.py`](src/sailguarding/web/app.py) is a framework-free
+  `(method, path, query, body) -> Response` router over the real aggregates; the SPA is a genuine
+  front-end over it, and it stays testable without a socket.
 - **Pluggable seams, injected.** Storage, classification strategy, scoring function, and decision
   log are `Protocol`s with an in-memory default, so tests inject a fresh one per case with no I/O.
 - **Serialisable, versioned, round-trip tested.** On-disk shapes carry a `schema_version` and a
@@ -47,7 +56,8 @@ mis-scoped or missing its demo surface — fix that as part of the story, not af
 ## Checks
 
 ```
-./setup.sh check      # ruff check + ruff format --check + mypy + pytest
+./setup.sh check      # ruff + ruff format + mypy + pytest, then front-end npm typecheck
 ```
 
-Run this before committing. Everything must be green **and** the task's demo shown.
+Run this before committing. Everything must be green **and** the task's demo shown. `sg serve`
+requires the front-end to be built (`./setup.sh` does this, or run `npm run build` in `frontend/`).

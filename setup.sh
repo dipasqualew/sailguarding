@@ -18,6 +18,15 @@ echo "==> Syncing dependencies (uv sync --all-packages)"
 # not just the root engine.
 uv sync --all-packages
 
+# Build the React SPA so `sg serve` has something to serve. Guarded on npm: the Python engine and
+# its tests do not need Node, so a machine without it can still sync and run checks.
+if command -v npm >/dev/null 2>&1; then
+  echo "==> Building front-end (frontend: npm ci && npm run build)"
+  (cd frontend && npm ci && npm run build)
+else
+  echo "==> Skipping front-end build (npm not found); 'sg serve' will show a build-me page." >&2
+fi
+
 if [[ "${1:-}" == "check" ]]; then
   echo "==> Lint (ruff check)"
   uv run ruff check .
@@ -27,6 +36,10 @@ if [[ "${1:-}" == "check" ]]; then
   uv run mypy
   echo "==> Tests (pytest)"
   uv run pytest
+  if command -v npm >/dev/null 2>&1; then
+    echo "==> Front-end type-check (frontend: npm run typecheck)"
+    (cd frontend && npm run typecheck)
+  fi
 fi
 
 echo "==> Done."
